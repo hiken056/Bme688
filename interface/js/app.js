@@ -5,9 +5,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const badge      = document.getElementById('update-badge');
     const footer     = document.getElementById('last-updated');
     const duration   = document.getElementById('measurement-duration');
+    const sessionDialog = document.getElementById('session-dialog');
+    const sessionForm   = document.getElementById('session-form');
+    const sessionTitle  = document.getElementById('session-title');
+    const sessionError  = document.getElementById('session-error');
+    const sessionCancel = document.getElementById('session-cancel');
+    const sessionStart  = document.getElementById('session-start');
 
     let isRunning = false;
     let liveInterval = null;
+    let activeFolderName = null;
 
     // block config changes while measuring
     const navLinks = document.querySelectorAll('nav a, .mobile-nav-links a');
@@ -38,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const ts = Date.now();
         console.log('[Auto-Sync] RTC =>', new Date(ts).toISOString());
         
-        fetch('/api/sync-time', { 
+        return fetch('/api/sync-time', {
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ timestamp_ms: ts }) 
@@ -72,6 +79,46 @@ document.addEventListener('DOMContentLoaded', () => {
         saveFileDuration().catch(e => {
             statusLog.innerHTML = `<p class="stopped-text" style="color:var(--danger);">${e.message}</p>`;
         });
+    });
+
+    function openSessionDialog() {
+        sessionTitle.value = '';
+        sessionError.textContent = '';
+        sessionDialog.showModal();
+        sessionTitle.focus();
+    }
+
+    sessionCancel.addEventListener('click', () => sessionDialog.close());
+
+    sessionForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const measurementTitle = sessionTitle.value.trim();
+        if (!measurementTitle) return;
+
+        sessionStart.disabled = true;
+        sessionError.textContent = '';
+
+        Promise.all([syncRTC(), saveFileDuration()])
+            .then(() => fetch('/api/start-sensor', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    measurement_title: measurementTitle,
+                    file_duration_minutes: Number(duration.value)
+                })
+            }))
+            .then(r => r.json())
+            .then(res => {
+                if (res.status !== 'success') throw new Error(res.message || 'Start failed');
+                sessionDialog.close();
+                startUI(res.file_duration_minutes, res.measurement_title);
+            })
+            .catch(e => {
+                sessionError.textContent = e.message;
+            })
+            .finally(() => {
+                sessionStart.disabled = false;
+            });
     });
 
 
@@ -118,10 +165,12 @@ document.addEventListener('DOMContentLoaded', () => {
         badge.classList.remove('live');
     }
 
-    function startUI(fileDurationMinutes = null) {
+    function startUI(fileDurationMinutes = null, folderName = null) {
         if (isRunning) return;
         isRunning = true;
+        if (sessionDialog.open) sessionDialog.close();
         if (fileDurationMinutes) duration.value = String(fileDurationMinutes);
+        activeFolderName = folderName || activeFolderName;
         duration.disabled = true;
         btn.textContent = 'STOP';
         btn.classList.replace('start', 'stop');
@@ -134,7 +183,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 .then(res => {
                     if (res.status === 'success' && res.logs) {
                         if (res.logs.includes('[S') || res.logs.includes('Collecting data') || res.logs.includes('[OK] Sensor')) {
-                            statusLog.innerHTML = `<p class="running-text" style="color:var(--success);">Recording 8 sensors simultaneously...</p>`;
+                            const name = activeFolderName || 'measurements';
+                            statusLog.innerHTML = `<p class="running-text" style="color:var(--success);">Writing to ${name}</p>`;
                         } else {
                             statusLog.innerHTML = `<p class="running-text" style="color:var(--neon-blue);">Initializing sensors...</p><pre class="debug-log" style="color:#ff6b6b">${res.logs}</pre>`;
                         }
@@ -154,6 +204,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function stopUI() {
         if (!isRunning) return;
         isRunning = false;
+        activeFolderName = null;
         duration.disabled = false;
         btn.textContent = 'START';
         btn.classList.replace('stop', 'start');
@@ -166,21 +217,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btn.addEventListener('click', () => {
         if (!isRunning) {
-            syncRTC();
-            saveFileDuration()
-                .then(() => fetch('/api/start-sensor', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ file_duration_minutes: Number(duration.value) })
-                }))
-                .then(r => r.json())
-                .then(res => {
-                    if (res.status !== 'success') throw new Error(res.message || 'Start failed');
-                    startUI(res.file_duration_minutes);
-                })
-                .catch(e => {
-                    statusLog.innerHTML = `<p class="stopped-text" style="color:var(--danger);">${e.message}</p>`;
-                });
+            openSessionDialog();
         } else {
             fetch('/api/stop-sensor', { method: 'POST' });
             stopUI();
@@ -193,7 +230,9 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(r => r.json())
             .then(res => {
                 if (res.status === 'success') {
-                    if (res.is_running && !isRunning) startUI(res.file_duration_minutes);
+                    if (res.is_running && !isRunning) {
+                        startUI(res.file_duration_minutes, res.measurement_title);
+                    }
                     else if (!res.is_running && isRunning) stopUI();
                 }
             }).catch(e => {});

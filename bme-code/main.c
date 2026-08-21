@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
+#include <limits.h>
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -13,7 +15,6 @@
 
 #define NUM_SENSORS      8
 #define NUM_STEPS        10
-#define MEASUREMENTS_DIR "measurements"
 #define CONFIG_PATH      "/var/lib/bme688/config.json"
 #define LEGACY_CONFIG_PATH "/tmp/bme_config.json"
 #define LIVE_PATH        "/tmp/bme_latest.json"
@@ -293,15 +294,10 @@ static void load_all_profiles(SensorProfile profiles[NUM_SENSORS]) {
     free(raw);
 }
 
-// create one session file per sensor
+// create one file per sensor inside the current file set
 static FILE *open_session_file(int sensor_idx,
                                const char *preset_name,
-                               time_t file_started_at,
-                               int file_duration_minutes) {
-    mkdir(MEASUREMENTS_DIR, 0777);
-    struct tm started_at;
-    localtime_r(&file_started_at, &started_at);
-
+                               const char *file_set_dir) {
     char safe_preset[64];
     strncpy(safe_preset, preset_name, 63);
     safe_preset[63] = '\0';
@@ -311,13 +307,14 @@ static FILE *open_session_file(int sensor_idx,
         }
     }
 
-    char filepath[256];
-    snprintf(filepath, sizeof(filepath),
-             "%s/%04d_%02d_%02d_%02d%02d%02d_sensor%d_%s_%dmin.csv",
-             MEASUREMENTS_DIR,
-             started_at.tm_year + 1900, started_at.tm_mon + 1, started_at.tm_mday,
-             started_at.tm_hour, started_at.tm_min, started_at.tm_sec,
-             sensor_idx + 1, safe_preset, file_duration_minutes);
+    char filepath[PATH_MAX];
+    int path_len = snprintf(filepath, sizeof(filepath),
+             "%s/sensor%d_%s.csv",
+             file_set_dir, sensor_idx + 1, safe_preset);
+    if (path_len < 0 || (size_t)path_len >= sizeof(filepath)) {
+        printf("[ERROR] Sensor %d: File path is too long.\n", sensor_idx + 1);
+        return NULL;
+    }
 
     FILE *f = fopen(filepath, "w");
     if (!f) {
@@ -333,8 +330,44 @@ static FILE *open_session_file(int sensor_idx,
 }
 
 static void open_session_files(SensorProfile profiles[NUM_SENSORS],
-                               int file_duration_minutes) {
+                               int file_duration_minutes,
+                               const char *measurement_dir) {
     time_t file_started_at = time(NULL);
+    struct tm started_at;
+    localtime_r(&file_started_at, &started_at);
+
+    char set_name[64];
+    snprintf(
+        set_name, sizeof(set_name),
+        "%04d-%02d-%02d_%02d-%02d-%02d_%dmin",
+        started_at.tm_year + 1900, started_at.tm_mon + 1, started_at.tm_mday,
+        started_at.tm_hour, started_at.tm_min, started_at.tm_sec,
+        file_duration_minutes
+    );
+
+    char file_set_dir[PATH_MAX];
+    int created = 0;
+    for (int number = 1; number < 100; number++) {
+        int path_len = number == 1
+            ? snprintf(file_set_dir, sizeof(file_set_dir), "%s/%s", measurement_dir, set_name)
+            : snprintf(file_set_dir, sizeof(file_set_dir), "%s/%s_%02d", measurement_dir, set_name, number);
+        if (path_len < 0 || (size_t)path_len >= sizeof(file_set_dir)) {
+            printf("[ERROR] File set path is too long.\n");
+            return;
+        }
+        if (mkdir(file_set_dir, 0777) == 0) {
+            created = 1;
+            break;
+        }
+        if (errno != EEXIST) {
+            printf("[ERROR] Failed to create file set folder: %s\n", file_set_dir);
+            return;
+        }
+    }
+    if (!created) {
+        printf("[ERROR] Could not create a unique file set folder.\n");
+        return;
+    }
 
     pthread_mutex_lock(&file_mutex);
     for (int i = 0; i < NUM_SENSORS; i++) {
@@ -343,7 +376,7 @@ static void open_session_files(SensorProfile profiles[NUM_SENSORS],
             fclose(g_cycle_files[i]);
         }
         g_cycle_files[i] = open_session_file(
-            i, profiles[i].name, file_started_at, file_duration_minutes
+            i, profiles[i].name, file_set_dir
         );
     }
     pthread_mutex_unlock(&file_mutex);
@@ -520,6 +553,11 @@ void *sensor_thread_func(void *arg) {
 
 int main(int argc, char *argv[]) {
     setvbuf(stdout, NULL, _IOLBF, 0);
+
+    if (argc == 2 && strcmp(argv[1], "--measurement-folder-support") == 0) {
+        return 0;
+    }
+
     printf("\nBME688 MEASUREMENTS\n");
 
     int file_duration_minutes = parse_file_duration_minutes(argc, argv);
@@ -527,6 +565,15 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "File duration must be 15, 20, 25, or 30 minutes.\n");
         return 2;
     }
+    const char *measurement_dir = getenv("BME_MEASUREMENT_DIR");
+    if ((!measurement_dir || measurement_dir[0] == '\0') && argc >= 3) {
+        measurement_dir = argv[2];
+    }
+    if (!measurement_dir || measurement_dir[0] == '\0') {
+        fprintf(stderr, "A measurement folder is required.\n");
+        return 2;
+    }
+    printf("[FILE] Measurement folder: %s\n", measurement_dir);
 
     signal(SIGTERM, handle_shutdown);
     signal(SIGINT,  handle_shutdown);
@@ -590,7 +637,7 @@ int main(int argc, char *argv[]) {
         printf("[CONFIG] Sensor %d operating in %s mode.\n", i + 1, profiles[i].mode);
     }
 
-    open_session_files(profiles, file_duration_minutes);
+    open_session_files(profiles, file_duration_minutes, measurement_dir);
     for (int i = 0; i < NUM_SENSORS; i++) {
         memset(&live[i], 0, sizeof(live[i]));
         strncpy(live[i].preset_name, profiles[i].name, 63);
@@ -618,7 +665,7 @@ int main(int argc, char *argv[]) {
         if (!g_running) break;
         if (monotonic_ms() >= next_file_ms) {
             printf("[FILE] Starting a new %d minute file set.\n", file_duration_minutes);
-            open_session_files(profiles, file_duration_minutes);
+            open_session_files(profiles, file_duration_minutes, measurement_dir);
             next_file_ms = monotonic_ms() +
                 (long long)file_duration_minutes * 60 * 1000;
         }

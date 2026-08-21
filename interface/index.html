@@ -74,6 +74,27 @@
         </div>
     </div>
 
+    <dialog id="session-dialog" class="session-dialog">
+        <form id="session-form" class="session-form">
+            <h3>New measurement</h3>
+            <p>Use the same title to group related runs.</p>
+            <label for="session-title">Measurement title</label>
+            <input
+                id="session-title"
+                class="text-input"
+                type="text"
+                maxlength="64"
+                autocomplete="off"
+                required
+            >
+            <p id="session-error" class="session-error"></p>
+            <div class="session-actions">
+                <button id="session-cancel" class="btn btn-outline" type="button">Cancel</button>
+                <button id="session-start" class="btn btn-primary" type="submit">Start</button>
+            </div>
+        </form>
+    </dialog>
+
     <script src="js/app.js"></script>
 </body>
 </html>
