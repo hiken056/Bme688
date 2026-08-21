@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BME688 Measurements</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+    <header class="mobile-topbar">
+        <span class="mobile-logo">BME688 <span>Measurements</span></span>
+        <div class="mobile-nav-links">
+            <a href="index.html" class="active">Acquisition</a>
+            <a href="config.html">Config</a>
+        </div>
+    </header>
+
+    <div class="desktop-layout">
+        <aside class="sidebar glass-panel">
+            <div class="logo">
+                <h2>BME688<br><span>Measurements</span></h2>
+            </div>
+            <nav>
+                <a href="index.html" class="active">Acquisition</a>
+                <a href="config.html">Configuration</a>
+            </nav>
+        </aside>
+
+        <div class="content-area">
+
+            <div class="acq-layout">
+
+                <div class="acquisition-panel glass-panel">
+                    <div class="status-badge" id="system-status">
+                        <span class="dot offline"></span>
+                        <span id="status-text">System Idle</span>
+                    </div>
+
+                    <button id="main-toggle-btn" class="massive-toggle start">
+                        START
+                    </button>
+
+                    <div id="status-log" class="status-log">
+                        <p class="stopped-text">Measurement stopped.</p>
+                    </div>
+
+                    <div class="mini-sensor-grid" id="mini-sensor-grid">
+                    </div>
+                </div>
+
+                <div class="live-data-panel glass-panel">
+                    <div class="live-header">
+                        <h3>Live Data</h3>
+                        <span class="update-badge" id="update-badge">—</span>
+                    </div>
+                    <div class="live-readings" id="live-readings">
+                        <div class="reading-row idle-msg">
+                            <span>Start measuring to see live data</span>
+                        </div>
+                    </div>
+                    <div class="live-footer">
+                        <span id="last-updated">—</span>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

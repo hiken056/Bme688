@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BME688 Measurements – Config</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+    <header class="mobile-topbar">
+        <span class="mobile-logo">BME688 <span>Measurements</span></span>
+        <div class="mobile-nav-links">
+            <a href="index.html">Acquisition</a>
+            <a href="config.html" class="active">Config</a>
+        </div>
+    </header>
+
+    <div class="desktop-layout">
+        <aside class="sidebar glass-panel">
+            <div class="logo">
+                <h2>BME688<br><span>Measurements</span></h2>
+            </div>
+            <nav>
+                <a href="index.html">Acquisition</a>
+                <a href="config.html" class="active">Configuration</a>
+            </nav>
+        </aside>
+
+        <div class="content-area config-content">
+
+            <div class="config-layout">
+                <div class="preset-card glass-panel">
+                    <div class="preset-header">
+                        <div class="preset-list" id="preset-list"></div>
+                        <button class="btn btn-sm btn-outline" id="add-preset-btn">+ New Preset</button>
+                    </div>
+
+                    <div class="preset-editor" id="preset-editor">
+                        <div class="editor-row">
+                            <div class="field-group">
+                                <label>Preset Name</label>
+                                <input type="text" id="edit-name" class="text-input" />
+                            </div>
+                            <div class="field-group">
+                                <label>Operating Mode</label>
+                                <select id="edit-mode">
+                                    <option value="parallel">Parallel</option>
+                                    <option value="sequential">Sequential</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="editor-row">
+                            <div class="field-group">
+                                <label>Duty Cycle (Cycles before sleep, 0 = Continuous)</label>
+                                <input type="number" id="edit-duty" class="text-input" min="0" />
+                            </div>
+                            <div class="field-group">
+                                <label>Sleep Time (Seconds)</label>
+                                <input type="number" id="edit-sleep" class="text-input" min="0" />
+                            </div>
+                        </div>
+
+                        <div class="steps-section">
+                            <label class="steps-label">Heater Profile (10 Steps)</label>
+                            <p class="muted-text" style="font-size:0.75rem; margin-bottom:8px;">Top row: Temperature (°C). Bottom row: 140 ms duration ticks (maximum 28 in sequential mode).</p>
+                            <div class="steps-container" id="curve-steps"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sensor-grid-card glass-panel">
+                    <h3>Sensor Assignment</h3>
+                    <p class="muted-text" style="font-size: 0.85rem; margin-top: 4px;">Select a preset on the left, then click a sensor to assign it.</p>
+                    
+                    <div class="sensor-grid" id="sensor-grid"></div>
+
+                    <div class="apply-row" style="margin-top: 2rem;">
+                        <button class="btn btn-primary" id="apply-all-btn" style="width:100%;">Apply Configuration to Device</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# editors
+.vscode/
+.clangd
+*.swp
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# local settings
+.env
+.env.*
+
+# build files
+*.o
+bme-code/main
+bme-code/test_json
+
+# runtime data
+logs.txt
+*.log
+measurements/
+bme-code/measurements/
+
+# local photos
+*.heic
+*.HEIC
