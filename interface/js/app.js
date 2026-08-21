@@ -1,11 +1,10 @@
 document.addEventListener('DOMContentLoaded', () => {
     const btn        = document.getElementById('main-toggle-btn');
     const statusLog  = document.getElementById('status-log');
-    const dot        = document.querySelector('.status-badge .dot');
-    const statusText = document.getElementById('status-text');
     const readings   = document.getElementById('live-readings');
     const badge      = document.getElementById('update-badge');
     const footer     = document.getElementById('last-updated');
+    const duration   = document.getElementById('measurement-duration');
 
     let isRunning = false;
     let liveInterval = null;
@@ -47,6 +46,33 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     syncRTC();
 
+    function saveFileDuration() {
+        return fetch('/api/file-duration', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file_duration_minutes: Number(duration.value) })
+        })
+            .then(r => r.json())
+            .then(res => {
+                if (res.status !== 'success') throw new Error(res.message || 'Save failed');
+                return res;
+            });
+    }
+
+    fetch('/api/file-duration')
+        .then(r => r.json())
+        .then(res => {
+            if (res.status === 'success') {
+                duration.value = String(res.file_duration_minutes);
+            }
+        })
+        .catch(e => console.error('Failed to load file length', e));
+
+    duration.addEventListener('change', () => {
+        saveFileDuration().catch(e => {
+            statusLog.innerHTML = `<p class="stopped-text" style="color:var(--danger);">${e.message}</p>`;
+        });
+    });
 
 
     function renderReadings(res) {
@@ -92,14 +118,14 @@ document.addEventListener('DOMContentLoaded', () => {
         badge.classList.remove('live');
     }
 
-    function startUI() {
+    function startUI(fileDurationMinutes = null) {
         if (isRunning) return;
         isRunning = true;
+        if (fileDurationMinutes) duration.value = String(fileDurationMinutes);
+        duration.disabled = true;
         btn.textContent = 'STOP';
         btn.classList.replace('start', 'stop');
-        dot.className = 'dot active';
-        statusText.textContent = 'System Active';
-        statusLog.innerHTML = `<p class="running-text" style="color:var(--neon-blue);">Starting system...</p>`;
+        statusLog.innerHTML = `<p class="running-text" style="color:var(--neon-blue);">Starting measurement...</p>`;
 
         // refresh live data every two seconds
         liveInterval = setInterval(() => {
@@ -128,10 +154,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function stopUI() {
         if (!isRunning) return;
         isRunning = false;
+        duration.disabled = false;
         btn.textContent = 'START';
         btn.classList.replace('stop', 'start');
-        dot.className = 'dot offline';
-        statusText.textContent = 'System Idle';
         statusLog.innerHTML = `<p class="stopped-text">Measurement stopped.</p>`;
         
         clearInterval(liveInterval);
@@ -142,8 +167,20 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => {
         if (!isRunning) {
             syncRTC();
-            fetch('/api/start-sensor', { method: 'POST' });
-            startUI();
+            saveFileDuration()
+                .then(() => fetch('/api/start-sensor', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_duration_minutes: Number(duration.value) })
+                }))
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status !== 'success') throw new Error(res.message || 'Start failed');
+                    startUI(res.file_duration_minutes);
+                })
+                .catch(e => {
+                    statusLog.innerHTML = `<p class="stopped-text" style="color:var(--danger);">${e.message}</p>`;
+                });
         } else {
             fetch('/api/stop-sensor', { method: 'POST' });
             stopUI();
@@ -156,7 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(r => r.json())
             .then(res => {
                 if (res.status === 'success') {
-                    if (res.is_running && !isRunning) startUI();
+                    if (res.is_running && !isRunning) startUI(res.file_duration_minutes);
                     else if (!res.is_running && isRunning) stopUI();
                 }
             }).catch(e => {});

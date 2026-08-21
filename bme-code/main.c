@@ -19,6 +19,7 @@
 #define LIVE_PATH        "/tmp/bme_latest.json"
 #define PROFILE_TICK_MS  140
 #define MAX_SEQUENTIAL_TICKS 28
+#define DEFAULT_FILE_DURATION_MINUTES 30
 
 // new data, valid gas reading, and stable heater
 #define BME68X_VALID_DATA  UINT8_C(0xB0)
@@ -40,29 +41,50 @@ typedef struct {
 } LiveReading;
 
 static FILE *g_cycle_files[NUM_SENSORS];
-static volatile int g_running = 1;
+static volatile sig_atomic_t g_running = 1;
+static volatile sig_atomic_t g_shutdown_signal = 0;
 static LiveReading live[NUM_SENSORS];
 
 // shared thread locks
 static pthread_mutex_t spi_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t live_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void handle_shutdown(int sig) {
+    g_shutdown_signal = sig;
     g_running = 0;
-    pthread_mutex_lock(&log_mutex);
-    printf("\n[SHUTDOWN] Signal %d received. Flushing and closing all files...\n", sig);
+}
+
+static void close_session_files(void) {
+    pthread_mutex_lock(&file_mutex);
     for (int i = 0; i < NUM_SENSORS; i++) {
         if (g_cycle_files[i]) {
             fflush(g_cycle_files[i]);
             fclose(g_cycle_files[i]);
             g_cycle_files[i] = NULL;
-            printf("[SHUTDOWN] Sensor %d file closed safely.\n", i + 1);
         }
     }
-    printf("[SHUTDOWN] All data saved. Exiting cleanly.\n");
-    pthread_mutex_unlock(&log_mutex);
-    exit(0);
+    printf("[FILE] All measurement files closed.\n");
+    pthread_mutex_unlock(&file_mutex);
+}
+
+static long long monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int parse_file_duration_minutes(int argc, char *argv[]) {
+    if (argc < 2) return DEFAULT_FILE_DURATION_MINUTES;
+
+    char *end = NULL;
+    long value = strtol(argv[1], &end, 10);
+    if (*argv[1] == '\0' || *end != '\0' ||
+        (value != 15 && value != 20 && value != 25 && value != 30)) {
+        return 0;
+    }
+    return (int)value;
 }
 
 // locked SPI access
@@ -82,7 +104,10 @@ static int8_t locked_spi_write(uint8_t reg_addr, const uint8_t *reg_data, uint32
     return rslt;
 }
 
-static void my_delay_us(uint32_t period, void *intf_ptr) { usleep(period); }
+static void my_delay_us(uint32_t period, void *intf_ptr) {
+    (void)intf_ptr;
+    usleep(period);
+}
 
 // config parser
 static const char *json_find_key(const char *hay, const char *key) {
@@ -183,7 +208,7 @@ static int find_and_parse_preset(const char *raw, const char *target_id, SensorP
 
 
 // fallback profile
-static void default_profile(SensorProfile *prof, int sensor_idx) {
+static void default_profile(SensorProfile *prof) {
     snprintf(prof->name, sizeof(prof->name), "Default");
     strcpy(prof->mode, "parallel");
     prof->duty = 0; prof->sleep_sec = 0;
@@ -221,7 +246,7 @@ static void normalize_profile(SensorProfile *prof, int sensor_idx) {
 
 // load one profile per sensor
 static void load_all_profiles(SensorProfile profiles[NUM_SENSORS]) {
-    for (int i = 0; i < NUM_SENSORS; i++) default_profile(&profiles[i], i);
+    for (int i = 0; i < NUM_SENSORS; i++) default_profile(&profiles[i]);
     const char *config_path = getenv("BME_CONFIG_PATH");
     if (!config_path || config_path[0] == '\0') config_path = CONFIG_PATH;
 
@@ -269,10 +294,13 @@ static void load_all_profiles(SensorProfile profiles[NUM_SENSORS]) {
 }
 
 // create one session file per sensor
-static FILE *open_session_file(int sensor_idx, const char *preset_name) {
+static FILE *open_session_file(int sensor_idx,
+                               const char *preset_name,
+                               time_t file_started_at,
+                               int file_duration_minutes) {
     mkdir(MEASUREMENTS_DIR, 0777);
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
+    struct tm started_at;
+    localtime_r(&file_started_at, &started_at);
 
     char safe_preset[64];
     strncpy(safe_preset, preset_name, 63);
@@ -285,11 +313,11 @@ static FILE *open_session_file(int sensor_idx, const char *preset_name) {
 
     char filepath[256];
     snprintf(filepath, sizeof(filepath),
-             "%s/%04d_%02d_%02d_%02d%02d%02d_sensor%d_%s.csv",
+             "%s/%04d_%02d_%02d_%02d%02d%02d_sensor%d_%s_%dmin.csv",
              MEASUREMENTS_DIR,
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-             t->tm_hour, t->tm_min, t->tm_sec,
-             sensor_idx + 1, safe_preset);
+             started_at.tm_year + 1900, started_at.tm_mon + 1, started_at.tm_mday,
+             started_at.tm_hour, started_at.tm_min, started_at.tm_sec,
+             sensor_idx + 1, safe_preset, file_duration_minutes);
 
     FILE *f = fopen(filepath, "w");
     if (!f) {
@@ -302,6 +330,23 @@ static FILE *open_session_file(int sensor_idx, const char *preset_name) {
                "Gas_Resistance_Ohms,Temperature_C,Humidity_perc,Pressure_hPa\n");
     fflush(f);
     return f;
+}
+
+static void open_session_files(SensorProfile profiles[NUM_SENSORS],
+                               int file_duration_minutes) {
+    time_t file_started_at = time(NULL);
+
+    pthread_mutex_lock(&file_mutex);
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        if (g_cycle_files[i]) {
+            fflush(g_cycle_files[i]);
+            fclose(g_cycle_files[i]);
+        }
+        g_cycle_files[i] = open_session_file(
+            i, profiles[i].name, file_started_at, file_duration_minutes
+        );
+    }
+    pthread_mutex_unlock(&file_mutex);
 }
 
 static void write_live(LiveReading readings[NUM_SENSORS]) {
@@ -339,7 +384,11 @@ static void write_csv_reading(int sensor_idx,
                               const SensorProfile *profile,
                               const struct bme68x_data *data,
                               long long timestamp_ms) {
-    if (!g_cycle_files[sensor_idx]) return;
+    pthread_mutex_lock(&file_mutex);
+    if (!g_cycle_files[sensor_idx]) {
+        pthread_mutex_unlock(&file_mutex);
+        return;
+    }
 
     fprintf(g_cycle_files[sensor_idx],
             "%lld,%d,%d,%d,%.2f,%.2f,%.2f,%.2f\n",
@@ -348,6 +397,7 @@ static void write_csv_reading(int sensor_idx,
             data->gas_resistance, data->temperature,
             data->humidity, data->pressure / 100.0f);
     fflush(g_cycle_files[sensor_idx]);
+    pthread_mutex_unlock(&file_mutex);
 }
 
 static void complete_cycle(int sensor_idx,
@@ -367,14 +417,16 @@ static void complete_cycle(int sensor_idx,
         fflush(stdout);
         pthread_mutex_unlock(&log_mutex);
         bme68x_set_op_mode(BME68X_SLEEP_MODE, sensor);
-        sleep(profile->sleep_sec);
+        for (int i = 0; i < profile->sleep_sec * 10 && g_running; i++) {
+            usleep(100000);
+        }
     } else {
         printf("Continuing.\n");
         fflush(stdout);
         pthread_mutex_unlock(&log_mutex);
     }
 
-    bme68x_set_op_mode(op_mode, sensor);
+    if (g_running) bme68x_set_op_mode(op_mode, sensor);
 }
 
 // sensor thread
@@ -469,6 +521,13 @@ void *sensor_thread_func(void *arg) {
 int main(int argc, char *argv[]) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("\nBME688 MEASUREMENTS\n");
+
+    int file_duration_minutes = parse_file_duration_minutes(argc, argv);
+    if (file_duration_minutes == 0) {
+        fprintf(stderr, "File duration must be 15, 20, 25, or 30 minutes.\n");
+        return 2;
+    }
+
     signal(SIGTERM, handle_shutdown);
     signal(SIGINT,  handle_shutdown);
 
@@ -531,8 +590,8 @@ int main(int argc, char *argv[]) {
         printf("[CONFIG] Sensor %d operating in %s mode.\n", i + 1, profiles[i].mode);
     }
 
+    open_session_files(profiles, file_duration_minutes);
     for (int i = 0; i < NUM_SENSORS; i++) {
-        g_cycle_files[i] = open_session_file(i, profiles[i].name);
         memset(&live[i], 0, sizeof(live[i]));
         strncpy(live[i].preset_name, profiles[i].name, 63);
     }
@@ -541,6 +600,7 @@ int main(int argc, char *argv[]) {
     ThreadArgs targs[NUM_SENSORS];
 
     printf("\n[START] Starting 8 independent sensor threads (Protected by Mutexes).\n");
+    printf("[START] Opening new files every %d minutes.\n", file_duration_minutes);
     for (int i = 0; i < NUM_SENSORS; i++) {
         targs[i].sensor_idx = i;
         targs[i].sensor = &sensors[i];
@@ -549,9 +609,19 @@ int main(int argc, char *argv[]) {
         pthread_create(&threads[i], NULL, sensor_thread_func, &targs[i]);
     }
 
+    long long next_file_ms = monotonic_ms() +
+        (long long)file_duration_minutes * 60 * 1000;
+
     // update live data twice per second
     while (g_running) {
-        usleep(500000); 
+        usleep(500000);
+        if (!g_running) break;
+        if (monotonic_ms() >= next_file_ms) {
+            printf("[FILE] Starting a new %d minute file set.\n", file_duration_minutes);
+            open_session_files(profiles, file_duration_minutes);
+            next_file_ms = monotonic_ms() +
+                (long long)file_duration_minutes * 60 * 1000;
+        }
         pthread_mutex_lock(&live_mutex);
         write_live(live);
         pthread_mutex_unlock(&live_mutex);
@@ -561,5 +631,9 @@ int main(int argc, char *argv[]) {
         pthread_join(threads[i], NULL);
     }
 
+    if (g_shutdown_signal) {
+        printf("[STOP] Signal %d received.\n", g_shutdown_signal);
+    }
+    close_session_files();
     return 0;
 }

@@ -40,7 +40,7 @@ sudo nmcli connection add \
 
 sudo nmcli connection modify "${AP_CONNECTION}" \
     connection.autoconnect yes \
-    connection.autoconnect-priority 100 \
+    connection.autoconnect-priority 999 \
     802-11-wireless.mode ap \
     802-11-wireless.band bg \
     ipv4.addresses "${AP_ADDRESS}/24" \
@@ -55,13 +55,4 @@ echo "Wi-Fi: ${AP_SSID}"
 echo "Password: none"
 echo "Address: http://${DEVICE_HOSTNAME}.local"
 echo "Fallback: http://${AP_ADDRESS}"
-echo "Starting access point"
-
-sudo nmcli radio wifi on
-
-if ! sudo nmcli --wait 45 connection up "${AP_CONNECTION}" ifname wlan0; then
-    echo "Access point failed to start"
-    sudo nmcli -f GENERAL.STATE,GENERAL.REASON device show wlan0 || true
-    sudo journalctl -u NetworkManager -n 40 --no-pager || true
-    exit 1
-fi
+echo "Run sudo reboot to start the access point"

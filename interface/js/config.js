@@ -119,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     let selectedPresetId = 'bosch_std';
+    let fileDurationMinutes = 30;
 
     function normalizeUserPreset(preset) {
         // support old browser config
@@ -143,6 +144,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const userPresets = res.presets.filter(p => !p.builtin).map(normalizeUserPreset);
                 presets = [...BUILTIN_PRESETS, ...userPresets];
                 if (res.assignments) sensorAssignments = res.assignments;
+                if ([15, 20, 25, 30].includes(res.file_duration_minutes)) {
+                    fileDurationMinutes = res.file_duration_minutes;
+                }
                 
                 renderPresets();
                 renderSensors();
@@ -163,6 +167,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     presets = [...BUILTIN_PRESETS, ...userPresets];
                 }
                 if (parsed.assignments) sensorAssignments = parsed.assignments;
+                if ([15, 20, 25, 30].includes(parsed.file_duration_minutes)) {
+                    fileDurationMinutes = parsed.file_duration_minutes;
+                }
             }
         } catch (e) {
             console.error('Failed to parse stored config', e);
@@ -377,7 +384,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     applyAllBtn.addEventListener('click', () => {
-        const payload = { presets, assignments: sensorAssignments };
+        const payload = {
+            presets,
+            assignments: sensorAssignments,
+            file_duration_minutes: fileDurationMinutes
+        };
 
         fetch('/api/config', {
             method: 'POST',

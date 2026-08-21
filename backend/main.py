@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
+from typing import Literal, Optional
 
 app = FastAPI()
 
@@ -28,9 +30,17 @@ app.add_middleware(
 )
 
 sensor_process = None
+sensor_file_started_at = None
+sensor_file_duration_minutes = None
+FILE_DURATION_OPTIONS = {15, 20, 25, 30}
+DEFAULT_FILE_DURATION_MINUTES = 30
 
 class TimeSync(BaseModel):
     timestamp_ms: int
+
+
+class StartSensorRequest(BaseModel):
+    file_duration_minutes: Literal[15, 20, 25, 30] = DEFAULT_FILE_DURATION_MINUTES
 
 
 def normalize_config(payload: dict) -> dict:
@@ -39,6 +49,8 @@ def normalize_config(payload: dict) -> dict:
         if "sleep" not in preset and "sleep_sec" in preset:
             preset["sleep"] = preset["sleep_sec"]
         preset.pop("sleep_sec", None)
+    if payload.get("file_duration_minutes") not in FILE_DURATION_OPTIONS:
+        payload["file_duration_minutes"] = DEFAULT_FILE_DURATION_MINUTES
     return payload
 
 
@@ -88,6 +100,19 @@ def read_config() -> dict | None:
 
     return None
 
+
+def read_file_duration() -> int:
+    payload = read_config()
+    if payload is None:
+        return DEFAULT_FILE_DURATION_MINUTES
+    return payload["file_duration_minutes"]
+
+
+def write_file_duration(file_duration_minutes: int) -> None:
+    payload = read_config() or {}
+    payload["file_duration_minutes"] = file_duration_minutes
+    write_config(payload)
+
 @app.post("/api/sync-time")
 def sync_time(data: TimeSync):
     timestamp_sec = data.timestamp_ms / 1000.0
@@ -100,6 +125,8 @@ def sync_time(data: TimeSync):
 @app.post("/api/config")
 def save_config(payload: dict):
     try:
+        if "file_duration_minutes" not in payload:
+            payload["file_duration_minutes"] = read_file_duration()
         write_config(payload)
         return {"status": "success"}
     except Exception as e:
@@ -115,9 +142,32 @@ def get_config():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
+@app.get("/api/file-duration")
+def get_file_duration():
+    try:
+        return {
+            "status": "success",
+            "file_duration_minutes": read_file_duration(),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/file-duration")
+def save_file_duration(request: StartSensorRequest):
+    try:
+        write_file_duration(request.file_duration_minutes)
+        return {
+            "status": "success",
+            "file_duration_minutes": request.file_duration_minutes,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/status")
 def get_status():
-    global sensor_process
+    global sensor_process, sensor_file_started_at, sensor_file_duration_minutes
     is_running = False
     if sensor_process and sensor_process.poll() is None:
         is_running = True
@@ -128,27 +178,55 @@ def get_status():
             is_running = True
         except subprocess.CalledProcessError:
             pass
-    return {"status": "success", "is_running": is_running}
+    if not is_running:
+        sensor_file_started_at = None
+        sensor_file_duration_minutes = None
+    elif sensor_file_duration_minutes is None:
+        sensor_file_duration_minutes = read_file_duration()
+
+    file_remaining_seconds = None
+    if is_running and sensor_file_started_at is not None and sensor_file_duration_minutes is not None:
+        file_duration_seconds = sensor_file_duration_minutes * 60
+        elapsed = time.monotonic() - sensor_file_started_at
+        file_remaining_seconds = max(0, round(file_duration_seconds - elapsed % file_duration_seconds))
+
+    return {
+        "status": "success",
+        "is_running": is_running,
+        "file_duration_minutes": sensor_file_duration_minutes,
+        "file_remaining_seconds": file_remaining_seconds,
+    }
 
 @app.post("/api/start-sensor")
-def start_sensor():
-    global sensor_process
+def start_sensor(request: Optional[StartSensorRequest] = None):
+    global sensor_process, sensor_file_started_at, sensor_file_duration_minutes
     try:
         if sensor_process and sensor_process.poll() is None:
             return {"status": "error", "message": "Sensor is already running"}
+
+        file_duration_minutes = (
+            request.file_duration_minutes if request else read_file_duration()
+        )
+        write_file_duration(file_duration_minutes)
             
         with open("/tmp/bme_log.txt", "w") as f:
             f.write("Starting sensor...\n")
             
-        log_file = open("/tmp/bme_log.txt", "a")
-        
-        sensor_process = subprocess.Popen(
-            ["./main"], 
-            cwd=SENSOR_DIR,
-            stdout=log_file,
-            stderr=subprocess.STDOUT
-        )
-        return {"status": "success", "pid": sensor_process.pid}
+        with open("/tmp/bme_log.txt", "a") as log_file:
+            sensor_process = subprocess.Popen(
+                ["./main", str(file_duration_minutes)],
+                cwd=SENSOR_DIR,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+
+        sensor_file_started_at = time.monotonic()
+        sensor_file_duration_minutes = file_duration_minutes
+        return {
+            "status": "success",
+            "pid": sensor_process.pid,
+            "file_duration_minutes": file_duration_minutes,
+        }
     except Exception as e:
         with open("/tmp/bme_log.txt", "a") as f:
             f.write(f"Failed to start: {str(e)}\n")
@@ -156,7 +234,7 @@ def start_sensor():
 
 @app.post("/api/stop-sensor")
 def stop_sensor():
-    global sensor_process
+    global sensor_process, sensor_file_started_at, sensor_file_duration_minutes
     try:
         if sensor_process and sensor_process.poll() is None:
             sensor_process.terminate()
@@ -164,6 +242,8 @@ def stop_sensor():
             sensor_process = None
         else:
             subprocess.run(["pkill", "-x", "main"])
+        sensor_file_started_at = None
+        sensor_file_duration_minutes = None
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "message": str(e)}

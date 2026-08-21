@@ -32,9 +32,15 @@
             <div class="acq-layout">
 
                 <div class="acquisition-panel glass-panel">
-                    <div class="status-badge" id="system-status">
-                        <span class="dot offline"></span>
-                        <span id="status-text">System Idle</span>
+                    <div class="duration-control">
+                        <label for="measurement-duration">File length</label>
+                        <select id="measurement-duration">
+                            <option value="15">15 minutes</option>
+                            <option value="20">20 minutes</option>
+                            <option value="25">25 minutes</option>
+                            <option value="30" selected>30 minutes</option>
+                        </select>
+                        <span>New files open automatically. Measurements continue until Stop.</span>
                     </div>
 
                     <button id="main-toggle-btn" class="massive-toggle start">

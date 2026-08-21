@@ -45,6 +45,7 @@ Run this after the backend works. It switches `wlan0` to a 2.4 GHz access point 
 
 ```bash
 bash setup_ap.sh
+sudo reboot
 ```
 
 Connect from a phone:

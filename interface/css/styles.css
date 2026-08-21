@@ -159,35 +159,28 @@ nav a.active {
     flex: 1;
 }
 
-.status-badge {
+.duration-control {
+    width: 220px;
     display: flex;
-    align-items: center;
-    gap: 9px;
-    font-family: var(--font-ui);
-    font-size: 1rem;
-    font-weight: 500;
-    background: rgba(0,0,0,0.22);
-    padding: 8px 18px;
-    border-radius: 30px;
-    border: 1px solid var(--glass-border);
+    flex-direction: column;
+    gap: 7px;
+    text-align: center;
 }
-
-.dot {
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    flex-shrink: 0;
+.duration-control label {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
-.dot.offline  { background: var(--muted); }
-.dot.active   {
-    background: var(--primary);
-    box-shadow: 0 0 12px var(--primary);
-    animation: pulse 1.4s ease-in-out infinite alternate;
+.duration-control span {
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.35;
 }
-
-@keyframes pulse {
-    from { opacity: 0.55; transform: scale(0.85); }
-    to   { opacity: 1;    transform: scale(1.15); }
+.duration-control select:disabled {
+    cursor: default;
+    opacity: 0.55;
 }
 
 .massive-toggle {
