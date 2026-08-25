@@ -19,7 +19,6 @@ venv/
 # build files
 *.o
 bme-code/main
-bme-code/test_json
 
 # runtime data
 logs.txt
