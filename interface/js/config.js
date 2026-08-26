@@ -3,122 +3,60 @@ document.addEventListener('DOMContentLoaded', () => {
     const colors = ['#ff6b6b','#48dbfb','#1dd1a1','#feca57','#ff9ff3','#00d2d3',
                      '#54a0ff','#5f27cd','#ff9f43','#10ac84','#ee5a24','#0652DD',
                      '#9980FA','#C4E538','#FDA7DF','#D980FA','#40407a','#33d9b2'];
-    const MAX_PARALLEL_TICKS = 100;
+    const MAX_PARALLEL_TICKS = 429;
     const MAX_SEQUENTIAL_TICKS = 28;
+    const DEFAULT_PRESET_ID = 'heater_354';
 
-    // built-in Bosch heater profiles
-    const BUILTIN_PRESETS = [
-        {
-            id: 'bosch_std', name: 'Bosch Standard (HP-354)', builtin: true, color: colors[0],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [320, 100, 100, 100, 200, 200, 200, 320, 320, 320],
-            ticks: [  5,   2,  10,  30,   5,   5,   5,   5,   5,   5]
-        },
-        {
-            id: 'bosch_lp', name: 'Bosch Low Power (HP-418)', builtin: true, color: colors[1],
-            mode: 'parallel', duty: 1, sleep: 10,
-            temps: [200, 200, 200, 200, 200, 200, 200, 200, 200, 200],
-            ticks: [ 10,  10,  10,  10,  10,  10,  10,  10,  10,  10]
-        },
-        {
-            id: 'bosch_ulp', name: 'Bosch Ultra Low Power (HP-419)', builtin: true, color: colors[2],
-            mode: 'parallel', duty: 1, sleep: 30,
-            temps: [150, 150, 150, 150, 150, 150, 150, 150, 150, 150],
-            ticks: [  5,   5,   5,   5,   5,   5,   5,   5,   5,   5]
-        },
-        {
-            id: 'bosch_voc_hi', name: 'Bosch VOC High (HP-411)', builtin: true, color: colors[3],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [400, 400, 350, 300, 250, 200, 150, 100, 50, 400],
-            ticks: [ 22,  11,  11,  11,  11,  11,  11,  11, 11,  22]
-        },
-        {
-            id: 'bosch_voc_ramp', name: 'Bosch VOC Ramp (HP-412)', builtin: true, color: colors[4],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [100, 150, 200, 250, 300, 350, 400, 350, 200, 100],
-            ticks: [ 10,  10,  10,  10,  10,  10,  22,  10,  10,  10]
-        },
-        {
-            id: 'bosch_iaq_3s', name: 'Bosch IAQ 3s (HP-501)', builtin: true, color: colors[5],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [320, 100, 100, 200, 200, 320, 320, 100, 200, 320],
-            ticks: [  5,   2,   5,   5,   5,   5,   5,   2,   5,   5]
-        },
-        {
-            id: 'bosch_iaq_300s', name: 'Bosch IAQ 300s (HP-502)', builtin: true, color: colors[6],
-            mode: 'sequential', duty: 1, sleep: 270,
-            temps: [320, 100, 100, 200, 200, 320, 320, 100, 200, 320],
-            ticks: [ 10,  10,  10,  10,  10,  10,  10,  10,  10,  10]
-        },
-        {
-            id: 'bosch_co2', name: 'Bosch CO2 Proxy (HP-601)', builtin: true, color: colors[7],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [400, 400, 400, 400, 400, 400, 400, 400, 400, 400],
-            ticks: [ 22,  22,  22,  22,  22,  22,  22,  22,  22,  22]
-        },
-        {
-            id: 'bosch_smoke', name: 'Bosch Smoke / Combustion (HP-602)', builtin: true, color: colors[8],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [350, 350, 350, 350, 400, 400, 400, 300, 250, 200],
-            ticks: [ 11,  11,  11,  11,  22,  22,  22,  11,  11,  11]
-        },
-        {
-            id: 'bosch_ethanol', name: 'Bosch Ethanol / Alcohol (HP-603)', builtin: true, color: colors[9],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [250, 300, 350, 400, 400, 350, 300, 250, 200, 150],
-            ticks: [ 11,  11,  11,  22,  22,  11,  11,  11,  11,  11]
-        },
-        {
-            id: 'bosch_h2', name: 'Bosch H2 / Reducing Gas (HP-701)', builtin: true, color: colors[10],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [150, 200, 250, 300, 350, 300, 250, 200, 150, 100],
-            ticks: [ 11,  11,  11,  11,  22,  11,  11,  11,  11,  11]
-        },
-        {
-            id: 'bosch_nh3', name: 'Bosch NH3 / Amines (HP-702)', builtin: true, color: colors[11],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [200, 250, 300, 350, 400, 400, 350, 300, 200, 150],
-            ticks: [ 11,  11,  11,  11,  22,  22,  11,  11,  11,  11]
-        },
-        {
-            id: 'bosch_toluene', name: 'Bosch Toluene / Aromatics (HP-703)', builtin: true, color: colors[12],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [300, 350, 400, 400, 350, 300, 250, 200, 150, 100],
-            ticks: [ 11,  11,  22,  22,  11,  11,  11,  11,  11,  11]
-        },
-        {
-            id: 'bosch_humidity', name: 'Bosch Humidity Sweep (HP-801)', builtin: true, color: colors[13],
-            mode: 'sequential', duty: 0, sleep: 0,
-            temps: [100, 100, 150, 150, 200, 200, 250, 250, 300, 300],
-            ticks: [ 20,  20,  20,  20,  20,  20,  20,  20,  20,  20]
-        },
-        {
-            id: 'bosch_wide', name: 'Bosch Wide Temp Scan (HP-901)', builtin: true, color: colors[14],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [ 50, 100, 150, 200, 250, 300, 350, 400, 350, 200],
-            ticks: [ 11,  11,  11,  11,  11,  11,  11,  22,  11,  11]
-        },
-        {
-            id: 'bosch_urban', name: 'Bosch Urban Air Quality (HP-3011)', builtin: true, color: colors[15],
-            mode: 'parallel', duty: 0, sleep: 0,
-            temps: [320, 200, 100, 200, 320, 200, 100, 200, 320, 100],
-            ticks: [  5,   5,   2,   5,   5,   5,   2,   5,   5,   2]
-        },
-        {
-            id: 'bosch_outdoor', name: 'Bosch Outdoor AQI (HP-3012)', builtin: true, color: colors[16],
-            mode: 'sequential', duty: 1, sleep: 60,
-            temps: [320, 320, 200, 200, 100, 100, 200, 200, 320, 320],
-            ticks: [ 10,  10,  10,  10,  10,  10,  10,  10,  10,  10]
-        }
+    // Profiles included with Bosch BME AI-Studio 2.3.2.
+    const BOSCH_PROFILES = [
+        ['heater_1',   'hp_001_stabilize', [320,320,320,320,320,320,320,320,320,320], [429,429,429,429,429,429,429,429,429,429]],
+        ['heater_301', 'hp_301_basic', [100,100,200,200,200,200,320,320,320,320], [2,41,2,14,14,14,2,14,14,14]],
+        ['heater_321', 'hp_321_stepped', [100,320,320,200,200,200,320,320,320,320], [43,2,2,2,21,21,2,14,14,14]],
+        ['heater_322', 'hp_322_stepped', [100,320,320,200,200,200,320,320,320,320], [64,2,2,2,31,31,2,20,21,21]],
+        ['heater_323', 'hp_323_wide', [70,350,350,210,210,210,350,350,350,350], [43,2,2,2,21,21,2,14,14,14]],
+        ['heater_324', 'hp_324_wide', [70,350,350,210,210,210,350,350,350,350], [64,2,2,2,31,31,2,20,21,21]],
+        ['heater_331', 'hp_331_deep', [50,50,350,350,350,140,140,350,350,350], [70,70,1,1,138,70,70,1,1,138]],
+        ['heater_332', 'hp_332_deep', [50,50,350,350,350,140,140,350,350,350], [100,100,1,1,198,100,100,1,1,198]],
+        ['heater_354', 'hp_354_standard', [320,100,100,100,200,200,200,320,320,320], [5,2,10,30,5,5,5,5,5,5]],
+        ['heater_411', 'hp_411_levels', [100,320,170,320,240,240,240,320,320,320], [43,2,43,2,2,20,21,2,20,21]],
+        ['heater_412', 'hp_412_levels', [100,320,170,320,240,240,240,320,320,320], [64,2,64,2,2,31,32,2,31,32]],
+        ['heater_413', 'hp_413_wide_levels', [70,350,163,350,256,256,256,350,350,350], [43,2,43,2,2,20,21,2,20,21]],
+        ['heater_414', 'hp_414_wide_levels', [70,350,163,350,256,256,256,350,350,350], [64,2,64,2,2,31,32,2,31,32]],
+        ['heater_501', 'hp_501_sweep', [210,265,265,320,320,265,210,155,100,155], [24,2,22,2,22,24,24,24,24,24]],
+        ['heater_502', 'hp_502_sweep', [210,265,265,320,320,265,210,155,100,155], [32,2,30,2,30,32,32,32,32,32]],
+        ['heater_503', 'hp_503_wide_sweep', [210,280,280,350,350,280,210,140,70,140], [24,2,22,2,22,24,24,24,24,24]],
+        ['heater_504', 'hp_504_wide_sweep', [210,280,280,350,350,280,210,140,70,140], [32,2,30,2,30,32,32,32,32,32]]
     ];
+
+    const BUILTIN_PRESETS = BOSCH_PROFILES.map(([id, name, temps, ticks], index) => ({
+        id,
+        name,
+        builtin: true,
+        color: colors[index],
+        mode: 'parallel',
+        duty: 0,
+        sleep: 0,
+        temps,
+        ticks
+    }));
+
+    const LEGACY_PRESET_IDS = {
+        bosch_std: 'heater_354',
+        bosch_voc_hi: 'heater_411',
+        bosch_voc_ramp: 'heater_412',
+        bosch_iaq_3s: 'heater_501',
+        bosch_iaq_300s: 'heater_502'
+    };
 
     let presets = [...BUILTIN_PRESETS];
     let sensorAssignments = {
-        1: 'bosch_std', 2: 'bosch_std', 3: 'bosch_std', 4: 'bosch_std',
-        5: 'bosch_std', 6: 'bosch_std', 7: 'bosch_std', 8: 'bosch_std'
+        1: DEFAULT_PRESET_ID, 2: DEFAULT_PRESET_ID,
+        3: DEFAULT_PRESET_ID, 4: DEFAULT_PRESET_ID,
+        5: DEFAULT_PRESET_ID, 6: DEFAULT_PRESET_ID,
+        7: DEFAULT_PRESET_ID, 8: DEFAULT_PRESET_ID
     };
 
-    let selectedPresetId = 'bosch_std';
+    let selectedPresetId = DEFAULT_PRESET_ID;
     let fileDurationMinutes = 30;
 
     function normalizeUserPreset(preset) {
@@ -136,6 +74,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return preset;
     }
 
+    function normalizeAssignments(assignments = {}) {
+        const availableIds = new Set(presets.map(preset => preset.id));
+        const normalized = {};
+
+        for (let sensor = 1; sensor <= 8; sensor++) {
+            const savedId = assignments[sensor];
+            const presetId = LEGACY_PRESET_IDS[savedId] || savedId;
+            normalized[sensor] = availableIds.has(presetId)
+                ? presetId
+                : DEFAULT_PRESET_ID;
+        }
+        return normalized;
+    }
+
     // load the device config first
     fetch('/api/config')
         .then(r => r.json())
@@ -143,7 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (res.presets) {
                 const userPresets = res.presets.filter(p => !p.builtin).map(normalizeUserPreset);
                 presets = [...BUILTIN_PRESETS, ...userPresets];
-                if (res.assignments) sensorAssignments = res.assignments;
+                sensorAssignments = normalizeAssignments(res.assignments);
                 if ([15, 20, 25, 30].includes(res.file_duration_minutes)) {
                     fileDurationMinutes = res.file_duration_minutes;
                 }
@@ -166,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const userPresets = parsed.presets.filter(p => !p.builtin).map(normalizeUserPreset);
                     presets = [...BUILTIN_PRESETS, ...userPresets];
                 }
-                if (parsed.assignments) sensorAssignments = parsed.assignments;
+                sensorAssignments = normalizeAssignments(parsed.assignments);
                 if ([15, 20, 25, 30].includes(parsed.file_duration_minutes)) {
                     fileDurationMinutes = parsed.file_duration_minutes;
                 }
@@ -185,11 +137,37 @@ document.addEventListener('DOMContentLoaded', () => {
     const sensorGridEl = document.getElementById('sensor-grid');
     const curveStepsEl = document.getElementById('curve-steps');
     const applyAllBtn  = document.getElementById('apply-all-btn');
+    const presetHelp = document.getElementById('preset-help');
+    const presetHelpButton = presetHelp.querySelector('.preset-help-button');
 
     const editName  = document.getElementById('edit-name');
     const editMode  = document.getElementById('edit-mode');
     const editDuty  = document.getElementById('edit-duty');
     const editSleep = document.getElementById('edit-sleep');
+
+    function setPresetHelpOpen(open) {
+        presetHelp.classList.toggle('is-open', open);
+        presetHelpButton.setAttribute('aria-expanded', String(open));
+    }
+
+    presetHelpButton.addEventListener('click', event => {
+        event.stopPropagation();
+        setPresetHelpOpen(!presetHelp.classList.contains('is-open'));
+    });
+
+    document.addEventListener('click', event => {
+        if (!presetHelp.contains(event.target)) {
+            setPresetHelpOpen(false);
+            presetHelpButton.blur();
+        }
+    });
+
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+            setPresetHelpOpen(false);
+            presetHelpButton.blur();
+        }
+    });
 
     function renderPresets() {
         presetListEl.innerHTML = '';
@@ -215,11 +193,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 del.addEventListener('click', (e) => {
                     e.stopPropagation();
                     presets = presets.filter(x => x.id !== p.id);
-                    const fallback = presets[0].id;
                     Object.keys(sensorAssignments).forEach(k => {
-                        if (sensorAssignments[k] === p.id) sensorAssignments[k] = fallback;
+                        if (sensorAssignments[k] === p.id) sensorAssignments[k] = DEFAULT_PRESET_ID;
                     });
-                    if (selectedPresetId === p.id) selectedPresetId = presets[0].id;
+                    if (selectedPresetId === p.id) selectedPresetId = DEFAULT_PRESET_ID;
                     renderPresets();
                     renderSensors();
                     loadEditor();

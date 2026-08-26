@@ -33,7 +33,28 @@
                 <div class="preset-card glass-panel">
                     <div class="preset-header">
                         <div class="preset-list" id="preset-list"></div>
-                        <button class="btn btn-sm btn-outline" id="add-preset-btn">+ New Preset</button>
+                        <div class="preset-actions">
+                            <div class="preset-help" id="preset-help">
+                                <button class="preset-help-button" type="button"
+                                        aria-label="Explain preset names"
+                                        aria-controls="preset-help-card"
+                                        aria-expanded="false">i</button>
+                                <div class="preset-help-card" id="preset-help-card" role="tooltip">
+                                    <p><strong>hp_###</strong> is the original Bosch profile number.</p>
+                                    <dl>
+                                        <div><dt>standard</dt><dd>Bosch default</dd></div>
+                                        <div><dt>basic</dt><dd>Simple three-temperature scan</dd></div>
+                                        <div><dt>stepped</dt><dd>Moves between fixed temperatures</dd></div>
+                                        <div><dt>wide</dt><dd>Uses a wider temperature range</dd></div>
+                                        <div><dt>deep</dt><dd>Uses longer temperature holds</dd></div>
+                                        <div><dt>levels</dt><dd>Tests several temperature levels</dd></div>
+                                        <div><dt>sweep</dt><dd>Heats up and back down</dd></div>
+                                        <div><dt>stabilize</dt><dd>Conditions a new sensor</dd></div>
+                                    </dl>
+                                </div>
+                            </div>
+                            <button class="btn btn-sm btn-outline" id="add-preset-btn">+ New Preset</button>
+                        </div>
                     </div>
 
                     <div class="preset-editor" id="preset-editor">

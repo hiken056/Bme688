@@ -336,9 +336,11 @@ nav a.active {
 .live-readings {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.8rem;
     align-content: start;
+    width: 100%;
+    min-width: 0;
 }
 
 .idle-msg {
@@ -347,6 +349,11 @@ nav a.active {
     font-style: italic;
     margin: auto;
     text-align: center;
+}
+
+.live-readings > .idle-msg {
+    grid-column: 1 / -1;
+    justify-self: center;
 }
 
 .reading-row {
@@ -363,6 +370,7 @@ nav a.active {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    min-width: 0;
 }
 .reading-card .rc-label {
     font-size: 0.8rem;
@@ -372,20 +380,30 @@ nav a.active {
     font-weight: 700;
     border-bottom: 1px solid rgba(255,255,255,0.06);
     padding-bottom: 8px;
+    text-align: center;
+    overflow-wrap: anywhere;
 }
 .rc-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: flex-end;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 8px;
+    align-items: end;
+    justify-items: center;
 }
 .rc-metric {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    align-items: center;
+    min-width: 0;
+    text-align: center;
+}
+.rc-metric:nth-child(3) {
+    grid-column: 1 / -1;
 }
 .rc-metric.gas-metric {
-    width: 100%;
+    width: auto;
+    grid-column: 1 / -1;
 }
 .rc-m-label {
     font-size: 0.65rem;
@@ -399,6 +417,8 @@ nav a.active {
     font-weight: 700;
     letter-spacing: -0.5px;
     color: #fff;
+    max-width: 100%;
+    white-space: nowrap;
 }
 .reading-card .rc-unit {
     font-size: 0.85rem;
@@ -456,6 +476,7 @@ nav a.active {
     margin-bottom: 1.5rem;
     border-bottom: 1px solid var(--glass-border);
     padding-bottom: 1rem;
+    position: relative;
 }
 
 .preset-list {
@@ -463,6 +484,98 @@ nav a.active {
     gap: 8px;
     flex-wrap: wrap;
     flex: 1;
+}
+
+.preset-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    z-index: 10;
+}
+
+.preset-help {
+    position: static;
+}
+
+.preset-help-button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--glass-border);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: default;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+
+.preset-help-button:hover,
+.preset-help-button:focus-visible,
+.preset-help.is-open .preset-help-button {
+    color: var(--text);
+    border-color: var(--primary);
+    background: rgba(108,92,231,0.12);
+    outline: none;
+}
+
+.preset-help-card {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 50%;
+    width: 290px;
+    padding: 14px;
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    background: #171720;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.38);
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.4;
+    opacity: 0;
+    visibility: hidden;
+    transform: translate(-50%, -4px);
+    transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+}
+
+.preset-help-button:focus-visible + .preset-help-card,
+.preset-help.is-open .preset-help-card {
+    opacity: 1;
+    visibility: visible;
+    transform: translate(-50%, 0);
+}
+
+@media (hover: hover) {
+    .preset-help:hover .preset-help-card {
+        opacity: 1;
+        visibility: visible;
+        transform: translate(-50%, 0);
+    }
+}
+
+.preset-help-card p {
+    margin-bottom: 9px;
+    color: var(--text);
+}
+
+.preset-help-card dl {
+    display: grid;
+    gap: 5px;
+}
+
+.preset-help-card dl div {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 8px;
+}
+
+.preset-help-card dt {
+    color: var(--primary-h);
+    font-weight: 700;
 }
 
 .preset-pill {
@@ -755,8 +868,11 @@ select:focus { border-color: var(--primary); }
         padding: 1.25rem;
     }
 
-    .config-card {
+    .config-card,
+    .preset-card,
+    .sensor-grid-card {
         padding: 1.25rem;
+        min-width: 0;
     }
 
     .config-row {
@@ -766,6 +882,22 @@ select:focus { border-color: var(--primary); }
 
     .field-group {
         min-width: 100%;
+    }
+
+    .preset-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+
+    .preset-header,
+    .preset-list,
+    .preset-editor,
+    .steps-section {
+        min-width: 0;
+    }
+
+    .preset-help-card {
+        width: min(290px, calc(100vw - 3rem));
     }
 
     .sensor-grid {

@@ -19,6 +19,7 @@
 #define LEGACY_CONFIG_PATH "/tmp/bme_config.json"
 #define LIVE_PATH        "/tmp/bme_latest.json"
 #define PROFILE_TICK_MS  140
+#define MAX_PARALLEL_TICKS 429
 #define MAX_SEQUENTIAL_TICKS 28
 #define DEFAULT_FILE_DURATION_MINUTES 30
 
@@ -241,8 +242,35 @@ static void normalize_profile(SensorProfile *prof, int sensor_idx) {
                    sensor_idx + 1, i + 1, MAX_SEQUENTIAL_TICKS);
             prof->ticks[i] = MAX_SEQUENTIAL_TICKS;
         }
+        if (strcmp(prof->mode, "parallel") == 0 &&
+            prof->ticks[i] > MAX_PARALLEL_TICKS) {
+            prof->ticks[i] = MAX_PARALLEL_TICKS;
+        }
         if (prof->temps[i] > 400) prof->temps[i] = 400;
     }
+}
+
+static uint16_t prepare_parallel_profile(SensorProfile *prof) {
+    uint16_t max_ticks = 0;
+    for (int i = 0; i < NUM_STEPS; i++) {
+        if (prof->ticks[i] > max_ticks) max_ticks = prof->ticks[i];
+    }
+
+    uint16_t scale = (uint16_t)((max_ticks + UINT8_MAX - 1) / UINT8_MAX);
+    if (scale <= 1) return 1;
+
+    uint32_t source_total = 0;
+    uint32_t register_total = 0;
+    for (int i = 0; i < NUM_STEPS; i++) {
+        source_total += prof->ticks[i];
+        uint32_t target_total = (source_total + scale / 2) / scale;
+        uint32_t repetitions = target_total - register_total;
+        if (repetitions < 1) repetitions = 1;
+        if (repetitions > UINT8_MAX) repetitions = UINT8_MAX;
+        prof->ticks[i] = (uint16_t)repetitions;
+        register_total += repetitions;
+    }
+    return scale;
 }
 
 // load one profile per sensor
@@ -625,11 +653,13 @@ int main(int argc, char *argv[]) {
             }
             hc.heatr_dur_prof = sequential_durations[i];
         } else {
+            uint16_t tick_scale = prepare_parallel_profile(&profiles[i]);
             hc.heatr_dur_prof = profiles[i].ticks;
             uint32_t md = bme68x_get_meas_dur(BME68X_PARALLEL_MODE, &conf, &sensors[i]) / 1000;
-            hc.shared_heatr_dur = (md >= PROFILE_TICK_MS)
+            uint32_t tick_ms = PROFILE_TICK_MS * tick_scale;
+            hc.shared_heatr_dur = (md >= tick_ms)
                 ? 5
-                : (uint16_t)(PROFILE_TICK_MS - md);
+                : (uint16_t)(tick_ms - md);
         }
 
         if (bme68x_set_heatr_conf(op_modes[i], &hc, &sensors[i]) != BME68X_OK) return -1;
