@@ -17,8 +17,8 @@ Keep increasing the number for new units.
 The Pi needs internet for this step.
 
 ```bash
-git clone <repository-url> bme688
-cd bme688
+git clone <repository-url>
+cd Bme688
 ```
 
 ## 2. Install the backend
