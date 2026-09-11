@@ -96,7 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const userPresets = res.presets.filter(p => !p.builtin).map(normalizeUserPreset);
                 presets = [...BUILTIN_PRESETS, ...userPresets];
                 sensorAssignments = normalizeAssignments(res.assignments);
-                if ([15, 20, 25, 30].includes(res.file_duration_minutes)) {
+                if ([1, 2, 3, 4, 5, 10, 15, 20, 25, 30].includes(res.file_duration_minutes)) {
                     fileDurationMinutes = res.file_duration_minutes;
                 }
                 
@@ -119,7 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     presets = [...BUILTIN_PRESETS, ...userPresets];
                 }
                 sensorAssignments = normalizeAssignments(parsed.assignments);
-                if ([15, 20, 25, 30].includes(parsed.file_duration_minutes)) {
+                if ([1, 2, 3, 4, 5, 10, 15, 20, 25, 30].includes(parsed.file_duration_minutes)) {
                     fileDurationMinutes = parsed.file_duration_minutes;
                 }
             }

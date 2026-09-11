@@ -83,7 +83,9 @@ static int parse_file_duration_minutes(int argc, char *argv[]) {
     char *end = NULL;
     long value = strtol(argv[1], &end, 10);
     if (*argv[1] == '\0' || *end != '\0' ||
-        (value != 15 && value != 20 && value != 25 && value != 30)) {
+        (value != 1 && value != 2 && value != 3 && value != 4 &&
+         value != 5 && value != 10 && value != 15 && value != 20 &&
+         value != 25 && value != 30)) {
         return 0;
     }
     return (int)value;
@@ -590,7 +592,7 @@ int main(int argc, char *argv[]) {
 
     int file_duration_minutes = parse_file_duration_minutes(argc, argv);
     if (file_duration_minutes == 0) {
-        fprintf(stderr, "File duration must be 15, 20, 25, or 30 minutes.\n");
+        fprintf(stderr, "Invalid file duration.\n");
         return 2;
     }
     const char *measurement_dir = getenv("BME_MEASUREMENT_DIR");

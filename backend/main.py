@@ -37,7 +37,7 @@ sensor_process = None
 sensor_file_started_at = None
 sensor_file_duration_minutes = None
 sensor_measurement_title = None
-FILE_DURATION_OPTIONS = {15, 20, 25, 30}
+FILE_DURATION_OPTIONS = {1, 2, 3, 4, 5, 10, 15, 20, 25, 30}
 DEFAULT_FILE_DURATION_MINUTES = 30
 
 class TimeSync(BaseModel):
@@ -45,12 +45,12 @@ class TimeSync(BaseModel):
 
 
 class FileDurationRequest(BaseModel):
-    file_duration_minutes: Literal[15, 20, 25, 30] = DEFAULT_FILE_DURATION_MINUTES
+    file_duration_minutes: Literal[1, 2, 3, 4, 5, 10, 15, 20, 25, 30] = DEFAULT_FILE_DURATION_MINUTES
 
 
 class StartSensorRequest(BaseModel):
     measurement_title: str
-    file_duration_minutes: Optional[Literal[15, 20, 25, 30]] = None
+    file_duration_minutes: Optional[Literal[1, 2, 3, 4, 5, 10, 15, 20, 25, 30]] = None
 
 
 def normalize_config(payload: dict) -> dict:

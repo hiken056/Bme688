@@ -25,6 +25,7 @@ logs.txt
 *.log
 measurements/
 bme-code/measurements/
+masuratori/
 
 # local photos
 *.heic

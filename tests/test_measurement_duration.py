@@ -42,7 +42,12 @@ class FileRotationTests(TestCase):
 
     def test_duration_is_limited_to_dropdown_values(self):
         with self.assertRaises(ValidationError):
-            main.FileDurationRequest(file_duration_minutes=10)
+            main.FileDurationRequest(file_duration_minutes=6)
+
+    def test_all_dropdown_values_are_allowed(self):
+        for duration in (1, 2, 3, 4, 5, 10, 15, 20, 25, 30):
+            request = main.FileDurationRequest(file_duration_minutes=duration)
+            self.assertEqual(request.file_duration_minutes, duration)
 
     def test_selected_duration_is_saved_and_loaded(self):
         response = main.save_file_duration(
