@@ -17,7 +17,7 @@ Keep increasing the number for new units.
 The Pi needs internet for this step.
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/hiken056/Bme688.git
 cd Bme688
 ```
 
@@ -41,19 +41,51 @@ The I2C scan should show `20`.
 
 ## 3. Start the access point
 
-Run this after the backend works. It switches `wlan0` to a 2.4 GHz access point and closes the current Wi-Fi and SSH connection.
+Run this after the backend works, while connected through the Pi's current Wi-Fi.
+Keep internet available for any missing dependencies.
+The setup uses hostapd with WPA2/AES on 2.4 GHz and dnsmasq for local addresses.
+Starting the access point disconnects the current Wi-Fi and SSH session.
 
 ```bash
 bash setup_ap.sh
+```
+
+Connect from a device:
+
+- Wi-Fi: `bme688-01`
+- Password: `utcnbme688`
+- Page: `http://bme688-01.local`
+- Fallback: `http://10.42.0.1`
+
+Every unit uses the same password. Change `01` to the unit number when reconnecting.
+The SSH examples use the Pi user `automatica`; replace it if yours is different.
+
+Within five minutes, reconnect and confirm:
+
+```bash
+ssh automatica@bme688-01.local
+cd ~/Bme688
+bash setup_ap.sh --confirm
+```
+
+Wait for `Access point saved` before rebooting. Without confirmation, the setup
+attempts to restore the previous Wi-Fi connection after five minutes.
+Do not reboot during the test.
+
+The access point provides access to the Pi, not an internet connection.
+
+## 4. Check after reboot
+
+After confirming:
+
+```bash
 sudo reboot
 ```
 
-Connect from a phone:
-
-- Wi-Fi: `bme688-01`
-- Password: none
-- Page: `http://bme688-01.local`
-- Fallback: `http://10.42.0.1`
+Reconnect your device to `bme688-01` with `utcnbme688` and open
+`http://bme688-01.local` or `http://10.42.0.1`.
+The access point should start automatically. No setup or confirmation is needed
+on later boots.
 
 ## Disable everything
 

@@ -42,6 +42,7 @@ sudo apt-get install -y \
     avahi-daemon \
     build-essential \
     dnsmasq-base \
+    hostapd \
     i2c-tools \
     iw \
     libnss-mdns \
