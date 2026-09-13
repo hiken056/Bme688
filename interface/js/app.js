@@ -16,11 +16,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let liveInterval = null;
     let activeFolderName = null;
 
-    // block config changes while measuring
+    // keep configuration and downloads closed while measuring
     const navLinks = document.querySelectorAll('nav a, .mobile-nav-links a');
     navLinks.forEach(link => {
         link.addEventListener('click', (e) => {
-            if (isRunning && link.getAttribute('href') === 'config.html') {
+            const target = link.getAttribute('href');
+            if (isRunning && (target === 'config.html' || target === 'files.html')) {
                 e.preventDefault();
                 btn.style.boxShadow = '0 0 40px var(--danger)';
                 setTimeout(() => btn.style.boxShadow = '', 400);
@@ -29,7 +30,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (p) {
                     const oldText = p.textContent;
                     const oldColor = p.style.color;
-                    p.textContent = "Stop measurement before changing config!";
+                    p.textContent = target === 'files.html'
+                        ? 'Stop measurement before downloading files!'
+                        : 'Stop measurement before changing config!';
                     p.style.color = "var(--danger)";
                     setTimeout(() => {
                         p.textContent = oldText;

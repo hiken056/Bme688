@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BME688 Measurements – Files</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+    <header class="mobile-topbar">
+        <span class="mobile-logo">BME688 <span>Measurements</span></span>
+        <div class="mobile-nav-links">
+            <a href="index.html">Acquisition</a>
+            <a href="config.html">Config</a>
+            <a href="files.html" class="active">Files</a>
+        </div>
+    </header>
+
+    <div class="desktop-layout">
+        <aside class="sidebar glass-panel">
+            <div class="logo">
+                <h2>BME688<br><span>Measurements</span></h2>
+            </div>
+            <nav>
+                <a href="index.html">Acquisition</a>
+                <a href="config.html">Configuration</a>
+                <a href="files.html" class="active">Files</a>
+            </nav>
+        </aside>
+
+        <main class="content-area files-content">
+            <section class="files-panel glass-panel">
+                <div class="files-header">
+                    <div>
+                        <h1>Measurement files</h1>
+                        <p>Download recorded data from this device.</p>
+                    </div>
+                    <label class="file-search">
+                        <span class="search-icon" aria-hidden="true"></span>
+                        <input id="file-search" type="search" placeholder="Search measurements" autocomplete="off">
+                    </label>
+                </div>
+
+                <div class="files-summary" id="files-summary"></div>
+                <div class="selection-bar" id="selection-bar" hidden>
+                    <span id="selection-count"></span>
+                    <div>
+                        <button class="selection-clear" id="selection-clear" type="button">Clear</button>
+                        <button class="delete-action" id="selection-delete" type="button">Delete</button>
+                        <button class="download-action" id="selection-download" type="button">
+                            <span class="download-icon" aria-hidden="true"></span>
+                            Download selected
+                        </button>
+                    </div>
+                </div>
+                <div class="files-loading" id="files-loading">Loading files…</div>
+                <div class="measurement-list" id="measurement-list"></div>
+
+                <div class="files-locked" id="files-locked" hidden>
+                    <h2>Measurement in progress</h2>
+                    <p>Stop measurement before downloading files.</p>
+                </div>
+
+                <div class="files-empty" id="files-empty" hidden>
+                    <span class="empty-folder" aria-hidden="true"></span>
+                    <h2>No measurement files</h2>
+                    <p>Files will appear here after the first recording.</p>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div class="files-notice" id="files-notice" role="status" aria-live="polite"></div>
+
+    <div class="confirm-overlay" id="delete-dialog" hidden>
+        <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+            <h2 id="delete-title">Delete selected files?</h2>
+            <p id="delete-message"></p>
+            <div class="confirm-actions">
+                <button class="confirm-cancel" id="delete-cancel" type="button">Cancel</button>
+                <button class="confirm-delete" id="delete-confirm" type="button">Delete files</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/files.js?v=3"></script>
+</body>
+</html>

@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 import subprocess
 import json
 import os
@@ -12,6 +13,8 @@ import tempfile
 import time
 from typing import Literal, Optional
 import unicodedata
+from datetime import datetime
+import zipfile
 
 app = FastAPI()
 
@@ -20,7 +23,9 @@ PROJECT_DIR = BASE_DIR.parent
 INTERFACE_DIR = PROJECT_DIR / "interface"
 SENSOR_DIR = PROJECT_DIR / "bme-code"
 SENSOR_BINARY = SENSOR_DIR / "main"
-MEASUREMENTS_DIR = SENSOR_DIR / "measurements"
+MEASUREMENTS_DIR = Path(
+    os.environ.get("BME_MEASUREMENTS_DIR", SENSOR_DIR / "measurements")
+)
 
 # saved config survives reboot
 CONFIG_PATH = Path(os.environ.get("BME_CONFIG_PATH", "/var/lib/bme688/config.json"))
@@ -51,6 +56,15 @@ class FileDurationRequest(BaseModel):
 class StartSensorRequest(BaseModel):
     measurement_title: str
     file_duration_minutes: Optional[Literal[1, 2, 3, 4, 5, 10, 15, 20, 25, 30]] = None
+
+
+class DownloadFilesRequest(BaseModel):
+    paths: list[str]
+    archive_name: str = "measurements"
+
+
+class DeleteFilesRequest(BaseModel):
+    paths: list[str]
 
 
 def normalize_config(payload: dict) -> dict:
@@ -154,6 +168,129 @@ def sensor_program_supports_measurement_folders() -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
 
+
+def sensor_is_running() -> bool:
+    if sensor_process and sensor_process.poll() is None:
+        return True
+    return subprocess.run(
+        ["pgrep", "-x", "main"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+def require_sensor_stopped() -> None:
+    if sensor_is_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Stop measurement before downloading files",
+        )
+
+
+def run_details(folder_name: str, modified_at: float) -> tuple[str, int | None]:
+    match = re.match(
+        r"^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\d+)min(?:_\d+)?$",
+        folder_name,
+    )
+    if not match:
+        return datetime.fromtimestamp(modified_at).isoformat(timespec="seconds"), None
+
+    recorded_at = datetime.strptime(
+        f"{match.group(1)}_{match.group(2)}",
+        "%Y-%m-%d_%H-%M-%S",
+    ).isoformat(timespec="seconds")
+    return recorded_at, int(match.group(3))
+
+
+def list_measurement_files() -> list[dict]:
+    if not MEASUREMENTS_DIR.exists():
+        return []
+
+    measurements = []
+    for title_dir in MEASUREMENTS_DIR.iterdir():
+        if not title_dir.is_dir() or title_dir.is_symlink() or title_dir.name.startswith("."):
+            continue
+
+        runs = []
+        for run_dir in title_dir.iterdir():
+            if not run_dir.is_dir() or run_dir.is_symlink() or run_dir.name.startswith("."):
+                continue
+
+            files = []
+            for file_path in run_dir.iterdir():
+                if not file_path.is_file() or file_path.is_symlink() or file_path.name.startswith("."):
+                    continue
+                stat = file_path.stat()
+                files.append({
+                    "name": file_path.name,
+                    "path": file_path.relative_to(MEASUREMENTS_DIR).as_posix(),
+                    "size_bytes": stat.st_size,
+                })
+            if not files:
+                continue
+
+            files.sort(key=lambda item: item["name"].lower())
+            recorded_at, duration_minutes = run_details(run_dir.name, run_dir.stat().st_mtime)
+            runs.append({
+                "name": run_dir.name,
+                "recorded_at": recorded_at,
+                "duration_minutes": duration_minutes,
+                "size_bytes": sum(item["size_bytes"] for item in files),
+                "files": files,
+            })
+
+        if not runs:
+            continue
+        runs.sort(key=lambda item: item["recorded_at"], reverse=True)
+        newest = max(item["recorded_at"] for item in runs)
+        measurements.append({
+            "name": title_dir.name,
+            "display_name": title_dir.name.replace("_", " ").replace("-", " "),
+            "size_bytes": sum(item["size_bytes"] for item in runs),
+            "newest": newest,
+            "runs": runs,
+        })
+
+    measurements.sort(key=lambda item: item["newest"], reverse=True)
+    for measurement in measurements:
+        measurement.pop("newest")
+    return measurements
+
+
+def resolve_measurement_file(relative_path: str) -> Path:
+    requested = Path(relative_path)
+    if requested.is_absolute() or ".." in requested.parts:
+        raise HTTPException(status_code=400, detail="Invalid measurement path")
+    try:
+        root = MEASUREMENTS_DIR.resolve(strict=True)
+        file_path = (root / requested).resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        raise HTTPException(status_code=404, detail="Measurement file not found")
+    if not file_path.is_relative_to(root) or not file_path.is_file():
+        raise HTTPException(status_code=400, detail="Invalid measurement path")
+    return file_path
+
+
+def safe_archive_name(name: str) -> str:
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", name.strip()).strip("-_")
+    return safe_name[:64] or "measurements"
+
+
+def selected_measurement_files(paths: list[str]) -> list[Path]:
+    if not paths:
+        raise HTTPException(status_code=400, detail="Select at least one file")
+    if len(paths) > 5000:
+        raise HTTPException(status_code=400, detail="Too many files selected")
+
+    files = []
+    seen = set()
+    for path in paths:
+        file_path = resolve_measurement_file(path)
+        if file_path not in seen:
+            files.append(file_path)
+            seen.add(file_path)
+    return files
+
 @app.post("/api/sync-time")
 def sync_time(data: TimeSync):
     timestamp_sec = data.timestamp_ms / 1000.0
@@ -210,16 +347,8 @@ def save_file_duration(request: FileDurationRequest):
 def get_status():
     global sensor_process, sensor_file_started_at, sensor_file_duration_minutes
     global sensor_measurement_title
-    is_running = False
-    if sensor_process and sensor_process.poll() is None:
-        is_running = True
-    else:
-        # uvicorn may have restarted while the sensor kept running
-        try:
-            subprocess.check_output(["pgrep", "-x", "main"])
-            is_running = True
-        except subprocess.CalledProcessError:
-            pass
+    # pgrep also finds a measurement that survived a backend restart
+    is_running = sensor_is_running()
     if not is_running:
         sensor_file_started_at = None
         sensor_file_duration_minutes = None
@@ -239,6 +368,78 @@ def get_status():
         "file_duration_minutes": sensor_file_duration_minutes,
         "file_remaining_seconds": file_remaining_seconds,
         "measurement_title": sensor_measurement_title,
+    }
+
+
+@app.get("/api/files")
+def get_measurement_files():
+    require_sensor_stopped()
+    measurements = list_measurement_files()
+    return {
+        "status": "success",
+        "measurements": measurements,
+        "recording_count": sum(len(item["runs"]) for item in measurements),
+        "file_count": sum(
+            len(run["files"])
+            for item in measurements
+            for run in item["runs"]
+        ),
+    }
+
+
+@app.post("/api/files/download")
+def download_measurement_files(request: DownloadFilesRequest):
+    require_sensor_stopped()
+    files = selected_measurement_files(request.paths)
+
+    if len(files) == 1:
+        return FileResponse(files[0], filename=files[0].name)
+
+    archive = tempfile.NamedTemporaryFile(prefix="bme688-", suffix=".zip", delete=False)
+    archive_path = Path(archive.name)
+    archive.close()
+    try:
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for file_path in files:
+                zip_file.write(
+                    file_path,
+                    file_path.relative_to(MEASUREMENTS_DIR.resolve()).as_posix(),
+                )
+    except Exception:
+        archive_path.unlink(missing_ok=True)
+        raise
+
+    return FileResponse(
+        archive_path,
+        media_type="application/zip",
+        filename=f"{safe_archive_name(request.archive_name)}.zip",
+        background=BackgroundTask(archive_path.unlink, missing_ok=True),
+    )
+
+
+@app.post("/api/files/delete")
+def delete_measurement_files(request: DeleteFilesRequest):
+    require_sensor_stopped()
+    files = selected_measurement_files(request.paths)
+    root = MEASUREMENTS_DIR.resolve()
+    directories = set()
+
+    for file_path in files:
+        directories.add(file_path.parent)
+        file_path.unlink()
+
+    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+        current = directory
+        while current != root and current.is_relative_to(root):
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
+
+    return {
+        "status": "success",
+        "deleted_count": len(files),
     }
 
 @app.post("/api/start-sensor")
