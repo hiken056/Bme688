@@ -7,38 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const MAX_SEQUENTIAL_TICKS = 28;
     const DEFAULT_PRESET_ID = 'heater_354';
 
-    // Profiles included with Bosch BME AI-Studio 2.3.2.
-    const BOSCH_PROFILES = [
-        ['heater_1',   'hp_001_stabilize', [320,320,320,320,320,320,320,320,320,320], [429,429,429,429,429,429,429,429,429,429]],
-        ['heater_301', 'hp_301_basic', [100,100,200,200,200,200,320,320,320,320], [2,41,2,14,14,14,2,14,14,14]],
-        ['heater_321', 'hp_321_stepped', [100,320,320,200,200,200,320,320,320,320], [43,2,2,2,21,21,2,14,14,14]],
-        ['heater_322', 'hp_322_stepped', [100,320,320,200,200,200,320,320,320,320], [64,2,2,2,31,31,2,20,21,21]],
-        ['heater_323', 'hp_323_wide', [70,350,350,210,210,210,350,350,350,350], [43,2,2,2,21,21,2,14,14,14]],
-        ['heater_324', 'hp_324_wide', [70,350,350,210,210,210,350,350,350,350], [64,2,2,2,31,31,2,20,21,21]],
-        ['heater_331', 'hp_331_deep', [50,50,350,350,350,140,140,350,350,350], [70,70,1,1,138,70,70,1,1,138]],
-        ['heater_332', 'hp_332_deep', [50,50,350,350,350,140,140,350,350,350], [100,100,1,1,198,100,100,1,1,198]],
-        ['heater_354', 'hp_354_standard', [320,100,100,100,200,200,200,320,320,320], [5,2,10,30,5,5,5,5,5,5]],
-        ['heater_411', 'hp_411_levels', [100,320,170,320,240,240,240,320,320,320], [43,2,43,2,2,20,21,2,20,21]],
-        ['heater_412', 'hp_412_levels', [100,320,170,320,240,240,240,320,320,320], [64,2,64,2,2,31,32,2,31,32]],
-        ['heater_413', 'hp_413_wide_levels', [70,350,163,350,256,256,256,350,350,350], [43,2,43,2,2,20,21,2,20,21]],
-        ['heater_414', 'hp_414_wide_levels', [70,350,163,350,256,256,256,350,350,350], [64,2,64,2,2,31,32,2,31,32]],
-        ['heater_501', 'hp_501_sweep', [210,265,265,320,320,265,210,155,100,155], [24,2,22,2,22,24,24,24,24,24]],
-        ['heater_502', 'hp_502_sweep', [210,265,265,320,320,265,210,155,100,155], [32,2,30,2,30,32,32,32,32,32]],
-        ['heater_503', 'hp_503_wide_sweep', [210,280,280,350,350,280,210,140,70,140], [24,2,22,2,22,24,24,24,24,24]],
-        ['heater_504', 'hp_504_wide_sweep', [210,280,280,350,350,280,210,140,70,140], [32,2,30,2,30,32,32,32,32,32]]
-    ];
-
-    const BUILTIN_PRESETS = BOSCH_PROFILES.map(([id, name, temps, ticks], index) => ({
-        id,
-        name,
-        builtin: true,
-        color: colors[index],
-        mode: 'parallel',
-        duty: 0,
-        sleep: 0,
-        temps,
-        ticks
-    }));
+    const BUILTIN_PRESETS = window.HeaterProfiles.presets();
+    const preview = window.ClassifierPreview;
 
     const LEGACY_PRESET_IDS = {
         bosch_std: 'heater_354',
@@ -89,8 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // load the device config first
-    fetch('/api/config')
-        .then(r => r.json())
+    (preview.isDemo ? preview.refreshConfiguration().then(() => preview.configuration().config)
+        : fetch('/api/config').then(r => r.json()))
         .then(res => {
             if (res.presets) {
                 const userPresets = res.presets.filter(p => !p.builtin).map(normalizeUserPreset);
@@ -367,15 +337,17 @@ document.addEventListener('DOMContentLoaded', () => {
             file_duration_minutes: fileDurationMinutes
         };
 
-        fetch('/api/config', {
+        (preview.isDemo ? Promise.resolve().then(() => {
+            preview.saveDemoConfiguration(payload);
+            return { status: 'success' };
+        }) : fetch('/api/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
-        })
-            .then(r => r.json())
+        }).then(r => r.json()))
             .then(res => {
                 if (res.status !== 'success') throw new Error(res.message || 'Save failed');
-                localStorage.setItem('bmeConfig', JSON.stringify(payload));
+                if (!preview.isDemo) localStorage.setItem('bmeConfig', JSON.stringify(payload));
                 const orig = applyAllBtn.textContent;
                 applyAllBtn.textContent = '\u2713 Configuration Saved';
                 setTimeout(() => applyAllBtn.textContent = orig, 2000);
