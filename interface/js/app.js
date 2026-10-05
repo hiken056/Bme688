@@ -1,9 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const btn        = document.getElementById('main-toggle-btn');
     const statusLog  = document.getElementById('status-log');
-    const readings   = document.getElementById('live-readings');
-    const badge      = document.getElementById('update-badge');
-    const footer     = document.getElementById('last-updated');
+    const preview = window.ClassifierPreview;
     const duration   = document.getElementById('measurement-duration');
     const sessionDialog = document.getElementById('session-dialog');
     const sessionForm   = document.getElementById('session-form');
@@ -11,40 +9,46 @@ document.addEventListener('DOMContentLoaded', () => {
     const sessionError  = document.getElementById('session-error');
     const sessionCancel = document.getElementById('session-cancel');
     const sessionStart  = document.getElementById('session-start');
+    const classifierWarning = document.getElementById('session-classifier-warning');
+    const classifierWarningText = document.getElementById('session-classifier-warning-text');
+    const sessionMatch = document.getElementById('session-match-profiles');
 
     let isRunning = false;
     let liveInterval = null;
     let activeFolderName = null;
 
-    // keep configuration and downloads closed while measuring
-    const navLinks = document.querySelectorAll('nav a, .mobile-nav-links a');
-    navLinks.forEach(link => {
-        link.addEventListener('click', (e) => {
-            const target = link.getAttribute('href');
-            if (isRunning && (target === 'config.html' || target === 'files.html')) {
-                e.preventDefault();
-                btn.style.boxShadow = '0 0 40px var(--danger)';
-                setTimeout(() => btn.style.boxShadow = '', 400);
-                
-                const p = statusLog.querySelector('.running-text');
-                if (p) {
-                    const oldText = p.textContent;
-                    const oldColor = p.style.color;
-                    p.textContent = target === 'files.html'
-                        ? 'Stop measurement before downloading files!'
-                        : 'Stop measurement before changing config!';
-                    p.style.color = "var(--danger)";
-                    setTimeout(() => {
-                        p.textContent = oldText;
-                        p.style.color = oldColor;
-                    }, 2000);
-                }
-            }
-        });
+    // keep settings and files closed while measuring
+    const navigationWarnings = {
+        'files.html': 'Stop measurement before downloading files!',
+        'config.html': 'Stop measurement before changing config!',
+        'classifier.html': 'Stop measurement before opening Classifier!'
+    };
+    document.addEventListener('click', (e) => {
+        const link = e.target.closest('a[href]');
+        if (!link || !isRunning) return;
+        const target = new URL(link.href).pathname.split('/').pop();
+        if (!navigationWarnings[target]) return;
+
+        e.preventDefault();
+        btn.style.boxShadow = '0 0 40px var(--danger)';
+        setTimeout(() => btn.style.boxShadow = '', 400);
+
+        const p = statusLog.querySelector('.running-text');
+        if (p) {
+            const oldText = p.textContent;
+            const oldColor = p.style.color;
+            p.textContent = navigationWarnings[target];
+            p.style.color = 'var(--danger)';
+            setTimeout(() => {
+                p.textContent = oldText;
+                p.style.color = oldColor;
+            }, 2000);
+        }
     });
 
     // set the Pi clock from the browser
     function syncRTC() {
+        if (preview.isDemo) return Promise.resolve();
         const ts = Date.now();
         console.log('[Auto-Sync] RTC =>', new Date(ts).toISOString());
         
@@ -57,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     syncRTC();
 
     function saveFileDuration() {
+        if (preview.isDemo) return Promise.resolve({ status: 'success' });
         return fetch('/api/file-duration', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -69,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     }
 
-    fetch('/api/file-duration')
+    if (!preview.isDemo) fetch('/api/file-duration')
         .then(r => r.json())
         .then(res => {
             if (res.status === 'success') {
@@ -87,9 +92,27 @@ document.addEventListener('DOMContentLoaded', () => {
     function openSessionDialog() {
         sessionTitle.value = '';
         sessionError.textContent = '';
+        updateSessionWarning();
         sessionDialog.showModal();
         sessionTitle.focus();
     }
+
+    function updateSessionWarning() {
+        const model = preview.activeModel();
+        const check = model ? preview.compatibility(model) : null;
+        classifierWarning.hidden = !check || check.compatible;
+        classifierWarningText.textContent = check?.status === 'mismatch'
+            ? 'Profiles don’t match the selected model. This measurement will record data without predictions.'
+            : 'The classifier setup cannot be verified. This measurement will record data without predictions.';
+        sessionMatch.hidden = check?.status !== 'mismatch';
+    }
+
+    sessionMatch.addEventListener('click', () => {
+        sessionDialog.close();
+        window.dispatchEvent(new Event('classifier-match-request'));
+    });
+    window.addEventListener('classifier-config-change', updateSessionWarning);
+    window.addEventListener('classifier-preview-change', updateSessionWarning);
 
     sessionCancel.addEventListener('click', () => sessionDialog.close());
 
@@ -97,6 +120,12 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         const measurementTitle = sessionTitle.value.trim();
         if (!measurementTitle) return;
+
+        if (preview.isDemo) {
+            preview.saveSession({ running: true, title: measurementTitle, duration: Number(duration.value) });
+            startUI(Number(duration.value), measurementTitle);
+            return;
+        }
 
         sessionStart.disabled = true;
         sessionError.textContent = '';
@@ -125,49 +154,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
 
-    function renderReadings(res) {
-        // keep old single-sensor responses working
-        const list = res.sensors ? res.sensors : [res];
-
-        readings.innerHTML = list.map(d => {
-            if (!d.valid && d.valid !== undefined) return '';
-            return `
-                <div class="reading-card">
-                    <div class="rc-label">Sensor ${d.sensor || 1} &mdash; ${d.preset || ''}</div>
-                    <div class="rc-metrics">
-                        <div class="rc-metric">
-                            <div class="rc-m-label">TEMP</div>
-                            <div class="rc-value">${d.temperature?.toFixed(1) ?? '—'}<span class="rc-unit">°C</span></div>
-                        </div>
-                        <div class="rc-metric">
-                            <div class="rc-m-label">HUM</div>
-                            <div class="rc-value">${d.humidity?.toFixed(1) ?? '—'}<span class="rc-unit">%</span></div>
-                        </div>
-                        <div class="rc-metric">
-                            <div class="rc-m-label">PRES</div>
-                            <div class="rc-value">${d.pressure?.toFixed(1) ?? '—'}<span class="rc-unit">hPa</span></div>
-                        </div>
-                        <div class="rc-metric gas-metric">
-                            <div class="rc-m-label">GAS</div>
-                            <div class="rc-value">${d.gasResistance ? Math.round(d.gasResistance).toLocaleString() : '—'}<span class="rc-unit">Ω</span></div>
-                        </div>
-                    </div>
-                </div>`;
-        }).join('');
-
-        const now = new Date();
-        footer.textContent = `Last updated: ${now.toLocaleTimeString('en-US', { hour12: false })}`;
-        badge.textContent = 'LIVE';
-        badge.classList.add('live');
-    }
-
-    function resetReadings() {
-        readings.innerHTML = `<div class="reading-row idle-msg"><span>Start measuring to see live data</span></div>`;
-        footer.textContent = '—';
-        badge.textContent = '—';
-        badge.classList.remove('live');
-    }
-
     function startUI(fileDurationMinutes = null, folderName = null) {
         if (isRunning) return;
         isRunning = true;
@@ -178,8 +164,15 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.textContent = 'STOP';
         btn.classList.replace('start', 'stop');
         statusLog.innerHTML = `<p class="running-text" style="color:var(--neon-blue);">Starting measurement...</p>`;
+        window.dispatchEvent(new CustomEvent('measurement-ui-change', { detail: { running: true } }));
 
-        // refresh live data every two seconds
+        if (preview.isDemo) {
+            statusLog.innerHTML = '<p class="running-text" style="color:var(--success);"></p>';
+            statusLog.querySelector('p').textContent = `Writing to ${activeFolderName}`;
+            return;
+        }
+
+        // refresh recording logs every two seconds
         liveInterval = setInterval(() => {
             fetch('/api/logs')
                 .then(r => r.json())
@@ -191,14 +184,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else {
                             statusLog.innerHTML = `<p class="running-text" style="color:var(--neon-blue);">Initializing sensors...</p><pre class="debug-log" style="color:#ff6b6b">${res.logs}</pre>`;
                         }
-                    }
-                }).catch(e => {});
-
-            fetch('/api/latest')
-                .then(r => r.json())
-                .then(res => {
-                    if (res.status === 'success' && res.data) {
-                        renderReadings(res.data);
                     }
                 }).catch(e => {});
         }, 2000);
@@ -215,20 +200,21 @@ document.addEventListener('DOMContentLoaded', () => {
         
         clearInterval(liveInterval);
         liveInterval = null;
-        resetReadings();
+        window.dispatchEvent(new CustomEvent('measurement-ui-change', { detail: { running: false } }));
     }
 
     btn.addEventListener('click', () => {
         if (!isRunning) {
             openSessionDialog();
         } else {
-            fetch('/api/stop-sensor', { method: 'POST' });
+            if (preview.isDemo) preview.saveSession({ running: false });
+            else fetch('/api/stop-sensor', { method: 'POST' });
             stopUI();
         }
     });
 
     // keep several open devices in sync
-    setInterval(() => {
+    function checkMeasurementStatus() {
         fetch('/api/status')
             .then(r => r.json())
             .then(res => {
@@ -239,7 +225,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     else if (!res.is_running && isRunning) stopUI();
                 }
             }).catch(e => {});
-    }, 2500);
+    }
+
+    if (preview.isDemo) {
+        const session = preview.readSession();
+        if (session.running) startUI(session.duration, session.title);
+    } else {
+        checkMeasurementStatus();
+        setInterval(checkMeasurementStatus, 2500);
+    }
 
     function renderMiniGrid() {
         const gridEl = document.getElementById('mini-sensor-grid');
@@ -252,6 +246,14 @@ document.addEventListener('DOMContentLoaded', () => {
             1: 'p_std', 2: 'p_std', 3: 'p_std', 4: 'p_std',
             5: 'p_std', 6: 'p_std', 7: 'p_std', 8: 'p_std'
         };
+
+        if (preview.isDemo) {
+            preview.refreshConfiguration().then(() => {
+                const config = preview.configuration().config;
+                buildGrid(config?.presets || [], config?.assignments || {});
+            });
+            return;
+        }
 
         fetch('/api/config')
             .then(r => r.json())
@@ -294,5 +296,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    window.addEventListener('classifier-config-change', () => {
+        const config = preview.configuration().config;
+        const grid = document.getElementById('mini-sensor-grid');
+        if (!grid) return;
+        [...grid.children].forEach((dot, index) => {
+            const preset = config?.presets?.find(item => item.id === config.assignments[index + 1]);
+            dot.style.setProperty('--dot-color', preset?.color || '#8888a0');
+            dot.title = `Sensor ${index + 1}: ${preset?.name || 'Unknown'}`;
+        });
+    });
     renderMiniGrid();
 });

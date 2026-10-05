@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BME688 Measurements – Classifier</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/classifier.css">
+</head>
+<body>
+    <header class="mobile-topbar">
+        <span class="mobile-logo">BME688 <span>Measurements</span></span>
+        <div class="mobile-nav-links">
+            <a href="index.html">Acquisition</a>
+            <a href="config.html">Config</a>
+            <a href="files.html">Files</a>
+            <a href="classifier.html" class="active" aria-current="page">Classifier</a>
+        </div>
+    </header>
+
+    <div class="desktop-layout">
+        <aside class="sidebar glass-panel">
+            <div class="logo">
+                <h2>BME688<br><span>Measurements</span></h2>
+            </div>
+            <nav>
+                <a href="index.html">Acquisition</a>
+                <a href="config.html">Configuration</a>
+                <a href="files.html">Files</a>
+                <a href="classifier.html" class="active" aria-current="page">Classifier</a>
+            </nav>
+        </aside>
+
+        <main class="content-area classifier-content">
+            <section id="classifier-panel" class="classifier-panel glass-panel" aria-labelledby="classifier-heading" hidden>
+                <div class="classifier-page-header">
+                    <div>
+                        <h1 id="classifier-heading">Classifier</h1>
+                        <p>Choose a model for live smell predictions.</p>
+                    </div>
+                </div>
+
+                <div class="classifier-layout">
+                    <section class="classifier-details" aria-labelledby="classifier-details-heading">
+                        <div class="classifier-section-heading">
+                            <h2 id="classifier-details-heading">Selected model</h2>
+                        </div>
+                        <div id="classifier-details-empty" class="classifier-details-empty">
+                            <span class="model-symbol" aria-hidden="true"></span>
+                            <p>Select a model to see its classes and settings.</p>
+                        </div>
+                        <div id="classifier-details-body" hidden>
+                            <h3 id="classifier-model-name" class="classifier-model-name"></h3>
+                            <p id="classifier-model-description" class="classifier-model-description"></p>
+                            <div class="classifier-detail-section">
+                                <h4>Smell classes</h4>
+                                <div class="classifier-tags" id="classifier-classes"></div>
+                            </div>
+                            <dl class="classifier-facts" id="classifier-facts"></dl>
+                            <div class="classifier-detail-section">
+                                <h4>Required heater profiles</h4>
+                                <div class="classifier-tags profile-tags" id="classifier-profiles"></div>
+                                <p class="classifier-profile-note">Match the profile settings and number of sensors. You can assign them to any sensor positions.</p>
+                            </div>
+                            <details class="classifier-settings">
+                                <summary>Model settings <span class="classifier-chevron" aria-hidden="true"></span></summary>
+                                <dl class="classifier-facts" id="classifier-file-facts"></dl>
+                                <button id="classifier-remove" class="btn classifier-remove-button" type="button">Remove model</button>
+                            </details>
+                        </div>
+                    </section>
+
+                    <section class="classifier-library" aria-labelledby="classifier-library-heading">
+                        <div class="classifier-section-heading">
+                            <h2 id="classifier-library-heading">Available models</h2>
+                            <span id="classifier-count" class="classifier-label">0 saved</span>
+                        </div>
+                        <div id="classifier-list" class="classifier-list"></div>
+                        <div id="classifier-empty" class="classifier-empty" hidden>
+                            <span class="model-symbol" aria-hidden="true"></span>
+                            <h3>No models yet</h3>
+                            <p>Add a model to start classifying smells.</p>
+                        </div>
+                        <p class="classifier-inline-notice" id="classifier-notice" role="status" aria-live="polite"></p>
+                        <div class="classifier-add-model" id="classifier-add-model">
+                            <label class="classifier-upload" id="classifier-upload" for="classifier-file">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>
+                                <strong>Add a model</strong>
+                                <span>Choose a JSON file or drop it here</span>
+                                <small>Maximum 5 MiB</small>
+                                <input id="classifier-file" type="file" accept=".json,application/json">
+                            </label>
+                            <p class="classifier-profile-note classifier-upload-note">Include profile_requirements with each profile's settings and sensor count. Sensor positions are matched automatically.</p>
+                        </div>
+                    </section>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <dialog class="session-dialog" id="classifier-remove-dialog" aria-labelledby="classifier-remove-title">
+        <form class="session-form" method="dialog">
+            <h3 id="classifier-remove-title">Remove this model?</h3>
+            <p id="classifier-remove-message"></p>
+            <div class="session-actions">
+                <button class="btn btn-outline" value="cancel">Cancel</button>
+                <button class="btn classifier-remove-button" value="remove">Remove</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script src="js/heater-profiles.js"></script>
+    <script src="js/classifier-store.js"></script>
+    <script src="js/classifier.js"></script>
+</body>
+</html>

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BME688 Measurements</title>
     <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/classifier.css">
 </head>
 <body>
 
@@ -14,6 +15,7 @@
             <a href="index.html" class="active">Acquisition</a>
             <a href="config.html">Config</a>
             <a href="files.html">Files</a>
+            <a href="classifier.html">Classifier</a>
         </div>
     </header>
 
@@ -26,6 +28,7 @@
                 <a href="index.html" class="active">Acquisition</a>
                 <a href="config.html">Configuration</a>
                 <a href="files.html">Files</a>
+                <a href="classifier.html">Classifier</a>
             </nav>
         </aside>
 
@@ -63,20 +66,36 @@
                     </div>
                 </div>
 
-                <div class="live-data-panel glass-panel">
+                <section class="prediction-panel glass-panel" aria-labelledby="prediction-heading">
                     <div class="live-header">
-                        <h3>Live Data</h3>
-                        <span class="update-badge" id="update-badge">—</span>
+                        <h3 id="prediction-heading">Live prediction</h3>
                     </div>
-                    <div class="live-readings" id="live-readings">
-                        <div class="reading-row idle-msg">
-                            <span>Start measuring to see live data</span>
+                    <div class="prediction-model">
+                        <div>
+                            <span class="classifier-label">Selected model</span>
+                            <p id="prediction-model-name">No model selected</p>
                         </div>
+                        <a class="prediction-manage-button" href="classifier.html">Manage</a>
                     </div>
-                    <div class="live-footer">
-                        <span id="last-updated">—</span>
+                    <div id="prediction-result" class="prediction-result" aria-live="polite" aria-atomic="true"></div>
+                    <div class="prediction-footer">
+                        <span id="prediction-updated">No predictions yet</span>
+                        <span id="prediction-window"></span>
                     </div>
-                </div>
+                    <div id="prediction-demo-controls" class="prediction-demo-controls" hidden>
+                        <label for="prediction-demo-state">State</label>
+                        <select id="prediction-demo-state">
+                            <option value="ready">Prediction ready</option>
+                            <option value="warming">Warming up</option>
+                            <option value="collecting">Collecting data</option>
+                            <option value="analysing">Analysing</option>
+                            <option value="unknown">Unknown smell</option>
+                            <option value="incompatible">Profile mismatch</option>
+                            <option value="error">Classifier unavailable</option>
+                            <option value="idle">Measurement stopped</option>
+                        </select>
+                    </div>
+                </section>
 
             </div>
         </div>
@@ -86,6 +105,10 @@
         <form id="session-form" class="session-form">
             <h3>New measurement</h3>
             <p>Use the same title to group related runs.</p>
+            <div id="session-classifier-warning" class="session-classifier-warning" hidden>
+                <p id="session-classifier-warning-text"></p>
+                <button id="session-match-profiles" class="classifier-text-link" type="button">Match profiles first</button>
+            </div>
             <label for="session-title">Measurement title</label>
             <input
                 id="session-title"
@@ -103,6 +126,23 @@
         </form>
     </dialog>
 
+    <dialog id="profile-match-dialog" class="session-dialog profile-match-dialog" aria-labelledby="profile-match-title">
+        <form id="profile-match-form" class="session-form">
+            <h3 id="profile-match-title">Use model profiles?</h3>
+            <p id="profile-match-message"></p>
+            <ul id="profile-match-changes" class="profile-match-changes"></ul>
+            <p class="classifier-profile-note">Other settings and measurement files are kept. This does not start a measurement.</p>
+            <p id="profile-match-error" class="session-error" role="alert"></p>
+            <div class="session-actions">
+                <button id="profile-match-cancel" class="btn btn-outline" type="button">Cancel</button>
+                <button id="profile-match-apply" class="btn btn-primary" type="submit">Apply profiles</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script src="js/heater-profiles.js"></script>
+    <script src="js/classifier-store.js"></script>
+    <script src="js/prediction.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>
