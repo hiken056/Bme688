@@ -94,3 +94,15 @@ bash disable_all.sh
 ```
 
 This stops the backend, sensor and access point. Saved configuration and measurements stay on the Pi.
+
+## Classifier
+
+Models are uploaded on the Classifier page and stored on the Pi. During a measurement, the Acquisition page shows
+the live prediction, the checks behind it and the clean-air reference:
+
+1. Classifier page: add the model JSON, select it and set **This board**.
+2. Start a measurement and wait for the 15-minute warm-up.
+3. Press **Record clean air** with nothing near the sensors (5 minutes).
+4. Bring the sample. Predictions appear every 30 seconds and are saved to `predictions.csv` in the recording.
+
+Details: [CLASSIFIER_MODELS.md](CLASSIFIER_MODELS.md).

@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,11 @@ import unicodedata
 from datetime import datetime
 import zipfile
 
+try:
+    import classifier
+except ImportError:  # imported as backend.main (tests run from the project folder)
+    from backend import classifier
+
 app = FastAPI()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -30,6 +36,10 @@ MEASUREMENTS_DIR = Path(
 # saved config survives reboot
 CONFIG_PATH = Path(os.environ.get("BME_CONFIG_PATH", "/var/lib/bme688/config.json"))
 LEGACY_CONFIG_PATH = Path("/tmp/bme_config.json")
+# models, the active model and the clean-air reference live next to the config
+STATE_DIR = Path(os.environ.get("BME_STATE_DIR", CONFIG_PATH.parent))
+# which folder the running measurement writes to (kept in /tmp: a reboot also stops the measurement)
+SESSION_PATH = Path(os.environ.get("BME_SESSION_PATH", "/tmp/bme_session.json"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,6 +75,18 @@ class DownloadFilesRequest(BaseModel):
 
 class DeleteFilesRequest(BaseModel):
     paths: list[str]
+
+
+class ActiveModelRequest(BaseModel):
+    id: Optional[str] = None
+
+
+class DeviceRequest(BaseModel):
+    board_name: Optional[str] = None
+
+
+class CalibrationRequest(BaseModel):
+    duration_seconds: int = classifier.CALIBRATION_SECONDS
 
 
 def normalize_config(payload: dict) -> dict:
@@ -293,6 +315,9 @@ def selected_measurement_files(paths: list[str]) -> list[Path]:
 
 @app.post("/api/sync-time")
 def sync_time(data: TimeSync):
+    # moving the clock during a measurement would break the time stamps the classifier relies on
+    if sensor_is_running():
+        return {"status": "skipped", "message": "Clock not changed during a measurement"}
     timestamp_sec = data.timestamp_ms / 1000.0
     try:
         subprocess.run(["sudo", "date", "-s", f"@{timestamp_sec}"], check=True)
@@ -481,6 +506,10 @@ def start_sensor(request: StartSensorRequest):
 
         sensor_file_started_at = time.monotonic()
         sensor_file_duration_minutes = file_duration_minutes
+        classifier.write_json_atomic(SESSION_PATH, {
+            "title_dir": str(measurement_dir),
+            "started_at": time.time(),
+        })
         sensor_measurement_title = measurement_title
         return {
             "status": "success",
@@ -505,6 +534,7 @@ def stop_sensor():
             sensor_process = None
         else:
             subprocess.run(["pkill", "-x", "main"])
+        SESSION_PATH.unlink(missing_ok=True)
         sensor_file_started_at = None
         sensor_file_duration_minutes = None
         sensor_measurement_title = None
@@ -540,6 +570,132 @@ def get_logs():
         return {"status": "success", "logs": tail}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+# ---------- classifier ----------
+
+def read_config_or_none():
+    try:
+        return read_config()
+    except Exception:
+        return None
+
+
+predictor = classifier.Predictor(
+    STATE_DIR, MEASUREMENTS_DIR, SESSION_PATH, sensor_is_running, read_config_or_none
+)
+
+
+@app.on_event("startup")
+def start_predictor():
+    predictor.start()
+
+
+def api_error(message: str, status_code: int = 400):
+    return JSONResponse({"status": "error", "message": message}, status_code=status_code)
+
+
+def models_locked():
+    if sensor_is_running():
+        return api_error("Stop the measurement before changing models.", 409)
+    return None
+
+
+@app.get("/api/models")
+def list_models():
+    models = predictor.store.models()
+    return {
+        "status": "success",
+        "models": [classifier.summary(model) for model in models],
+        "active_id": predictor.store.active_id(),
+    }
+
+
+@app.post("/api/models")
+async def upload_model(request: Request, filename: str = "model.json"):
+    locked = models_locked()
+    if locked:
+        return locked
+    body = await request.body()
+    if len(body) > classifier.MAX_MODEL_BYTES:
+        return api_error("The model file must be 5 MiB or smaller.", 413)
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return api_error("This file is not valid JSON.")
+    try:
+        model = predictor.store.add(payload, filename, len(body))
+    except classifier.ModelError as error:
+        return api_error(str(error))
+    if not predictor.store.active_id():
+        predictor.store.set_active(model["id"])
+    return {"status": "success", "model": classifier.summary(model), "active_id": predictor.store.active_id()}
+
+
+@app.post("/api/models/active")
+def select_model(request: ActiveModelRequest):
+    locked = models_locked()
+    if locked:
+        return locked
+    try:
+        predictor.store.set_active(request.id)
+    except classifier.ModelError as error:
+        return api_error(str(error), 404)
+    return {"status": "success", "active_id": predictor.store.active_id()}
+
+
+@app.delete("/api/models/{model_id}")
+def delete_model(model_id: str):
+    locked = models_locked()
+    if locked:
+        return locked
+    if not predictor.store.remove(model_id):
+        return api_error("Model not found.", 404)
+    return {"status": "success", "active_id": predictor.store.active_id()}
+
+
+@app.get("/api/device")
+def get_device():
+    board, source = predictor.board_name()
+    return {"status": "success", "board_name": board, "source": source}
+
+
+@app.post("/api/device")
+def save_device(request: DeviceRequest):
+    try:
+        predictor.set_board_name(request.board_name or None)
+    except ValueError as error:
+        return api_error(str(error))
+    return get_device()
+
+
+@app.get("/api/prediction")
+def get_prediction():
+    return predictor.snapshot()
+
+
+@app.post("/api/prediction/skip-warmup")
+def skip_warmup():
+    try:
+        predictor.skip_warmup()
+    except ValueError as error:
+        return api_error(str(error), 409)
+    return {"status": "success"}
+
+
+@app.post("/api/calibration/start")
+def start_calibration(request: CalibrationRequest):
+    try:
+        calibration = predictor.start_recording(request.duration_seconds)
+    except ValueError as error:
+        return api_error(str(error), 409)
+    return {"status": "success", "calibration": calibration}
+
+
+@app.post("/api/calibration/cancel")
+def cancel_calibration():
+    predictor.cancel_recording()
+    return {"status": "success"}
+
 
 app.mount("/static", StaticFiles(directory=INTERFACE_DIR, html=True), name="static")
 

@@ -12,20 +12,47 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedId = preview.activeModel()?.id || null;
     let measurementRunning = preview.isDemo && preview.readSession().running;
     let uploading = false;
+    let busy = false;
     let removeId = null;
+    const boardSelect = document.getElementById('classifier-board');
+    const boardNote = document.getElementById('classifier-board-note');
+    let boardState = { board_name: null, source: null };
+    let offlineNotice = false;
 
     function notify(message, error = false) {
         notice.textContent = message;
         notice.classList.toggle('is-error', error);
     }
 
+    function minutes(seconds) {
+        if (seconds < 60) return `${seconds} seconds`;
+        const value = Math.round(seconds / 6) / 10;
+        return `${value} ${value === 1 ? 'minute' : 'minutes'}`;
+    }
+
+    function shortDate(value) {
+        if (!value) return '';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value).slice(0, 10)
+            : date.toLocaleDateString([], { day: 'numeric', month: 'short' });
+    }
+
     function render() {
         const state = preview.read();
+        const loading = preview.modelsStatus();
         if (!state.models.some(model => model.id === selectedId)) {
             selectedId = state.activeId || state.models[0]?.id || null;
         }
-        empty.hidden = state.models.length !== 0;
-        document.getElementById('classifier-count').textContent = `${state.models.length} saved`;
+        empty.hidden = state.models.length !== 0 || loading.status !== 'ready';
+        document.getElementById('classifier-count').textContent = loading.status === 'loading' ? 'Loading…'
+            : loading.status === 'unavailable' ? 'Device offline' : `${state.models.length} on this device`;
+        if (loading.status === 'unavailable' && !notice.textContent) {
+            notify(loading.message, true);
+            offlineNotice = true;
+        } else if (loading.status === 'ready' && offlineNotice) {
+            notify('');
+            offlineNotice = false;
+        }
         list.replaceChildren();
         state.models.forEach(model => {
             const button = document.createElement('button');
@@ -39,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="model-symbol" aria-hidden="true"></span>
                 <span class="classifier-model-copy">
                     <strong>${preview.escapeHtml(model.name)}</strong>
-                    <span>v${preview.escapeHtml(model.version)} · ${model.classes.length} classes · ${preview.formatSize(model.size_bytes)}</span>
+                    <span>v${preview.escapeHtml(model.version)} · ${model.classes.length} classes${model.accuracy?.unseen_board ? ` · ${Math.round(model.accuracy.unseen_board * 100)}% tested` : ''} · ${preview.formatSize(model.size_bytes)}</span>
                 </span>
                 <span class="model-status ${model.id === state.activeId ? 'selected-status' : ''}">${model.id === state.activeId ? 'Selected' : 'Select'}</span>`;
             button.addEventListener('click', () => {
@@ -58,22 +85,75 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('classifier-model-description').textContent = model.description || model.filename;
             const facts = [
                 ['Sensors', `${model.sensors.length} sensors`],
-                ['Analysis window', `${model.window_seconds} seconds`],
-                ['Warm-up', `${model.warmup_seconds} seconds`],
-                ['Prediction interval', `${model.prediction_interval_seconds} seconds`]
+                ['Analysis window', minutes(model.window_seconds)],
+                ['Warm-up', minutes(model.warmup_seconds)],
+                ['Prediction interval', minutes(model.prediction_interval_seconds)]
             ];
+            if (model.accuracy?.unseen_board) {
+                facts.push(['Tested on a new board', `${Math.round(model.accuracy.unseen_board * 100)}% correct`]);
+            }
             document.getElementById('classifier-facts').innerHTML = facts.map(([label, value]) =>
                 `<div><dt>${label}</dt><dd>${preview.escapeHtml(value)}</dd></div>`).join('');
+            const references = model.references || [];
             document.getElementById('classifier-file-facts').innerHTML = [
                 ['Version', `v${model.version}`],
-                ['File size', preview.formatSize(model.size_bytes)]
+                ['File size', preview.formatSize(model.size_bytes)],
+                ...(model.uploaded_at ? [['Added', shortDate(model.uploaded_at)]] : []),
+                ...(model.filename ? [['File', model.filename]] : []),
+                ...(!model.demo ? [['Clean air stored for', references.length
+                    ? references.map(ref => `${ref.board}${ref.recorded_at ? ` (${shortDate(ref.recorded_at)})` : ''}`).join(', ')
+                    : 'No boards']] : [])
             ].map(([label, value]) => `<div><dt>${label}</dt><dd>${preview.escapeHtml(value)}</dd></div>`).join('');
-            renderTags('classifier-classes', model.classes);
+            renderTags('classifier-classes', model.class_labels || model.classes.map(preview.classLabel));
             document.getElementById('classifier-profiles').innerHTML = preview.profileGroups(model).map(group =>
                 `<span>${group.sensors.length ? `${group.sensors.length} × ` : ''}${preview.escapeHtml(group.name)}</span>`).join('');
         }
+        renderBoard();
         updateControls();
     }
+
+    function renderBoard() {
+        if (!boardSelect) return;
+        const boards = new Set(['bme1', 'bme2', 'bme3', 'bme4']);
+        preview.read().models.forEach(model => (model.references || []).forEach(ref => boards.add(ref.board)));
+        if (boardState.board_name) boards.add(boardState.board_name);
+        const current = boardState.board_name || '';
+        boardSelect.innerHTML = `<option value="">Not set</option>` + [...boards].sort().map(board =>
+            `<option value="${preview.escapeHtml(board)}">${preview.escapeHtml(board)}</option>`).join('');
+        boardSelect.value = current;
+        const active = preview.activeModel();
+        const stored = (active?.references || []).some(ref => ref.board === current);
+        boardNote.textContent = !current
+            ? 'Set this so the model can use its stored clean air until you record clean air on this board.'
+            : active && !active.demo && !stored
+                ? `The selected model has no clean air stored for ${current}. Record clean air on this board before predicting.`
+                : boardState.source === 'hostname'
+                    ? `Detected from the device name. Used only when no clean air was recorded on this board.`
+                    : 'Used only when no clean air was recorded on this board.';
+    }
+
+    async function loadBoard() {
+        try {
+            boardState = await preview.boardName();
+        } catch (error) {
+            boardState = { board_name: null, source: null };
+        }
+        renderBoard();
+    }
+
+    boardSelect?.addEventListener('change', async () => {
+        if (measurementRunning) return;
+        boardSelect.disabled = true;
+        try {
+            boardState = await preview.saveBoardName(boardSelect.value || null);
+            notify(boardState.board_name ? `This board is set to ${boardState.board_name}.` : 'Board cleared.');
+        } catch (error) {
+            notify(error.message, true);
+        } finally {
+            boardSelect.disabled = false;
+            renderBoard();
+        }
+    });
 
     function renderTags(id, values) {
         document.getElementById(id).innerHTML = values.map(value =>
@@ -81,13 +161,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateControls() {
-        fileInput.disabled = measurementRunning || uploading;
+        const offline = preview.modelsStatus().status !== 'ready';
+        fileInput.disabled = measurementRunning || uploading || busy || offline;
         upload.classList.toggle('is-disabled', fileInput.disabled);
         upload.setAttribute('aria-disabled', String(fileInput.disabled));
         list.querySelectorAll('button').forEach(button => {
-            button.disabled = measurementRunning;
+            button.disabled = measurementRunning || busy;
         });
-        remove.disabled = measurementRunning || !selectedId;
+        remove.disabled = measurementRunning || busy || !selectedId;
+        if (boardSelect) boardSelect.disabled = measurementRunning || busy;
     }
 
     function parseMetadata(payload, file) {
@@ -173,15 +255,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         uploading = true;
         updateControls();
+        notify('Checking the model…');
         try {
-            const payload = JSON.parse(await file.text());
-            const model = parseMetadata(payload, file);
+            const text = await file.text();
+            const model = parseMetadata(JSON.parse(text), file);
             if (measurementRunning) throw new Error('Stop measurement before adding a model.');
-            const state = preview.read();
-            state.models.push(model);
-            preview.save(state);
-            selectedId = model.id;
-            notify('Model added.');
+            const added = await preview.addModel(text, file, model);
+            selectedId = added?.id || model.id;
+            notify(preview.read().activeId === selectedId ? 'Model added and selected.' : 'Model added. Select it to use it.');
         } catch (error) {
             notify(error instanceof SyntaxError ? 'This file is not valid JSON.' : error.message, true);
         } finally {
@@ -202,27 +283,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }));
     upload.addEventListener('drop', e => importFile(e.dataTransfer.files[0]));
 
-    function selectModel(id, button) {
-        if (measurementRunning) return;
+    async function selectModel(id, button) {
+        if (measurementRunning || busy) return;
         const state = preview.read();
         const model = state.models.find(item => item.id === id);
         if (!model) return;
         const top = button.getBoundingClientRect().top;
         const changed = state.activeId !== id;
-        state.activeId = id;
+        busy = true;
+        updateControls();
         try {
-            if (changed) preview.save(state);
+            if (changed) await preview.selectModel(id);
             if (selectedId !== id) settings.open = false;
             selectedId = id;
             if (changed) notify('Model selected.');
+        } catch (error) {
+            notify(error.message || 'Could not select the model.', true);
+        } finally {
+            busy = false;
             render();
             const selectedButton = [...list.children].find(item => item.dataset.modelId === id);
             if (selectedButton) {
                 selectedButton.focus({ preventScroll: true });
                 window.scrollBy({ top: selectedButton.getBoundingClientRect().top - top, behavior: 'instant' });
             }
-        } catch (error) {
-            notify('Could not save the model selection in this browser.', true);
         }
     }
 
@@ -231,21 +315,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const model = preview.read().models.find(item => item.id === selectedId);
         if (!model) return;
         removeId = model.id;
-        document.getElementById('classifier-remove-message').textContent = `Remove ${model.name}? Measurement files are kept.`;
+        document.getElementById('classifier-remove-message').textContent = `Remove ${model.name} from this device? Measurement files are kept.`;
         removeDialog.returnValue = 'cancel';
         removeDialog.showModal();
     });
-    removeDialog.addEventListener('close', () => {
+    removeDialog.addEventListener('close', async () => {
         if (removeDialog.returnValue !== 'remove' || measurementRunning) return;
-        const state = preview.read();
-        state.models = state.models.filter(model => model.id !== removeId);
-        if (state.activeId === removeId) state.activeId = null;
+        busy = true;
+        updateControls();
         try {
-            preview.save(state);
+            await preview.removeModel(removeId);
             notify('Model removed.');
-            render();
         } catch (error) {
-            notify('Could not remove the model from browser storage.', true);
+            notify(error.message || 'Could not remove the model.', true);
+        } finally {
+            busy = false;
+            render();
         }
     });
 
@@ -279,7 +364,10 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('storage', event => {
         if (event.key === 'bmeClassifierPreviewV1' || event.key === null) render();
     });
+    window.addEventListener('classifier-preview-change', render);
+    window.addEventListener('focus', () => preview.refreshModels());
     render();
+    loadBoard();
     checkMeasurement();
     if (!preview.isDemo) {
         setInterval(checkMeasurement, 2500);

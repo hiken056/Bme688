@@ -4,17 +4,35 @@ document.addEventListener('DOMContentLoaded', () => {
     const updated = document.getElementById('prediction-updated');
     const windowLabel = document.getElementById('prediction-window');
     const stateSelect = document.getElementById('prediction-demo-state');
+    const checksBox = document.getElementById('prediction-checks');
+    const checksSummary = document.getElementById('prediction-checks-summary');
+    const checksList = document.getElementById('prediction-checks-list');
+    const referenceBox = document.getElementById('prediction-reference');
     const matchDialog = document.getElementById('profile-match-dialog');
     const matchForm = document.getElementById('profile-match-form');
     const matchError = document.getElementById('profile-match-error');
     const matchApply = document.getElementById('profile-match-apply');
     const matchCancel = document.getElementById('profile-match-cancel');
+    const airDialog = document.getElementById('air-dialog');
+    const airForm = document.getElementById('air-form');
+    const airError = document.getElementById('air-error');
+    const airStart = document.getElementById('air-start');
+    const airWarning = document.getElementById('air-warmup-warning');
     let measuring = false;
     let demoState = 'idle';
     let demoStartedAt = null;
     let previewOverride = false;
     let matchingProfiles = false;
     let matchPlan = null;
+    // live data from the device
+    let live = null;
+    let liveError = '';
+    let liveTimer = null;
+    let actionBusy = false;
+    let actionMessage = null;
+    // demo clean air
+    let demoReference = { source: 'model', label: 'Stored in the model (bme1)', recorded_at: '2026-09-22T17:11:58' };
+    let demoRecordingUntil = null;
 
     document.getElementById('prediction-demo-controls').hidden = !preview.showControls;
 
@@ -22,22 +40,52 @@ document.addEventListener('DOMContentLoaded', () => {
         no_model: ['No model selected', 'Choose a classifier to prepare live predictions.', 'Select a model', 'classifier.html'],
         inactive: ['Classifier inactive', 'Select a model on the Classifier page.', 'Select a model', 'classifier.html'],
         idle: ['Ready when you are', 'Start a measurement to collect a smell pattern.'],
+        starting: ['Starting sensors', 'Waiting for the first sensor readings.'],
         warming: ['Warming up', 'Waiting for the sensors to settle before analysing.'],
         collecting: ['Collecting data', 'Building a complete pattern across sensors and heater steps.'],
         analysing: ['Analysing', 'Comparing the latest pattern with the model.'],
+        calibrating: ['Recording clean air', 'Keep smells away from the sensors until the recording ends.'],
+        no_reference: ['Record clean air first', 'The model compares each smell with clean air from this board.'],
         incompatible: ['Profile mismatch', 'The selected model needs different heater profiles.', 'Review model', 'classifier.html'],
         checking: ['Checking profiles', 'Reading the sensor configuration before making predictions.'],
+        loading: ['Loading models', 'Reading the models stored on this device.'],
         unverified: ['Profile settings missing', 'This model needs its training profile settings and sensor counts.', 'Review model', 'classifier.html'],
         unavailable: ['Configuration unavailable', 'Cannot verify the sensor profiles. Predictions are paused; recording can continue.'],
+        no_data: ['No sensor data', 'No new readings are arriving from the sensors. Check the measurement log.'],
         error: ['Classifier unavailable', 'Predictions are unavailable. Measurement recording continues.'],
-        disconnected: ['Waiting for classifier', 'Predictions will appear when the classifier is connected.']
+        disconnected: ['Device not reachable', 'Predictions will appear when the device responds again. Recording continues on the device.']
     };
+    const busyStates = ['starting', 'warming', 'collecting', 'analysing', 'calibrating', 'loading'];
 
-    function renderState(state, model, message) {
+    function duration(seconds) {
+        seconds = Math.max(0, Math.round(seconds || 0));
+        if (seconds < 60) return `${seconds} s`;
+        if (seconds >= 5400) return `${Math.round(seconds / 3600)} h`;
+        const minutes = Math.floor(seconds / 60);
+        const rest = seconds % 60;
+        return rest && minutes < 10 ? `${minutes} min ${rest} s` : `${Math.round(seconds / 60)} min`;
+    }
+
+    function clock(value) {
+        const date = value ? new Date(value) : new Date();
+        return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
+    function day(value) {
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString([], { day: 'numeric', month: 'short' });
+    }
+
+    function pageLink(page) {
+        return `${page}${preview.isDemo ? `?demo=1${preview.showControls ? '&controls=1' : ''}` : ''}`;
+    }
+
+    // options: progress (0-100), note, actions (html), message
+    function renderState(state, model, message, options = {}) {
         if (state === 'incompatible') return renderMismatch(model, preview.compatibility(model));
-        const [title, description, action, href] = states[state];
-        const progress = state === 'warming' ? 43 : 68;
-        const busy = ['warming', 'collecting', 'analysing'].includes(state);
+        const [title, description, action, href] = states[state] || states.error;
+        const busy = busyStates.includes(state);
+        const progress = options.progress ?? (state === 'warming' ? 43 : 68);
         result.dataset.state = state;
         result.innerHTML = `
             <div class="prediction-placeholder">
@@ -46,15 +94,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 </span>
                 <h2>${title}</h2>
                 <p>${preview.escapeHtml(message || description)}</p>
-                ${busy ? `<div class="prediction-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
-                    <span class="prediction-progress-note">${state === 'warming' ? `${model?.warmup_seconds || 120}s warm-up` : `${model?.window_seconds || 60}s analysis window`}</span>` : ''}
-                ${action ? `<a class="btn btn-outline" href="${href}${preview.isDemo && href === 'classifier.html' ? (preview.showControls ? '?demo=1&controls=1' : '?demo=1') : ''}">${action}</a>` : ''}
+                ${busy && state !== 'loading' && state !== 'starting' ? `<div class="prediction-progress" aria-hidden="true"><span style="width:${Math.min(100, Math.max(3, progress))}%"></span></div>
+                    <span class="prediction-progress-note">${preview.escapeHtml(options.note ||
+                        (state === 'warming' ? `${duration(model?.warmup_seconds || 900)} warm-up` : `${model?.window_seconds || 120} s analysis window`))}</span>` : ''}
+                ${options.actions || ''}
+                ${action ? `<a class="btn btn-outline" href="${pageLink(href)}">${action}</a>` : ''}
             </div>`;
         updated.textContent = 'No predictions yet';
-    }
-
-    function pageLink(page) {
-        return `${page}${preview.isDemo ? `?demo=1${preview.showControls ? '&controls=1' : ''}` : ''}`;
     }
 
     function renderMismatch(model, check) {
@@ -71,12 +117,121 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button id="prediction-match-profiles" class="btn btn-primary" type="button" ${matchingProfiles ? 'disabled' : ''}>Use model profiles</button>
                     <a class="classifier-text-link" href="${pageLink('config.html')}">Configure manually</a>
                 </div>` : ''}
-                ${check.issues.length ? `<details class="prediction-profile-details">
+                ${check.issues?.length ? `<details class="prediction-profile-details">
                     <summary>See what differs <span class="classifier-chevron" aria-hidden="true"></span></summary>
                     <ul>${check.issues.map(issue => `<li>${preview.escapeHtml(issue)}</li>`).join('')}</ul>
                 </details>` : ''}
             </div>`;
         updated.textContent = 'Predictions unavailable';
+    }
+
+    // a real prediction from the device (or the demo)
+    function renderResult(prediction, model) {
+        const kind = prediction.state;
+        const confident = kind === 'ready';
+        const titles = {
+            ready: prediction.label_text, unknown: 'Unknown', unusual: 'Unusual pattern', insufficient: 'Not enough data'
+        };
+        const labels = {
+            ready: 'Predicted smell', unknown: 'No confident match', unusual: 'Not like the training data', insufficient: 'Prediction skipped'
+        };
+        const explanations = {
+            ready: `The best match over the last ${prediction.window_seconds} seconds.`,
+            unknown: `Closest match: ${prediction.top_text}, but below the ${Math.round((model?.unknown_below ?? 0.6) * 100)}% needed for a confident answer.`,
+            unusual: 'The sensor pattern is far from anything the model learned, so its answer would not be reliable.',
+            insufficient: 'Too few complete heater cycles arrived in the last window. Predictions continue when data arrives.'
+        };
+        const percent = Math.round(prediction.confidence * 100);
+        result.dataset.state = confident ? 'ready' : 'unknown';
+        result.innerHTML = `
+            <div class="prediction-summary ${confident ? '' : 'is-unknown'}">
+                <div>
+                    <span class="classifier-label">${labels[kind] || 'Prediction'}</span>
+                    <h2>${preview.escapeHtml(titles[kind] || prediction.top_text)}</h2>
+                </div>
+                ${kind === 'insufficient' ? '' : `<div class="prediction-confidence">
+                    <strong>${percent}<span>%</span></strong>
+                    <span>${confident ? 'Model confidence' : 'Top score'}</span>
+                </div>`}
+            </div>
+            <p class="prediction-explanation">${preview.escapeHtml(explanations[kind] || '')}</p>
+            ${prediction.warnings?.length ? `<ul class="prediction-warnings">${prediction.warnings.map(text =>
+                `<li>${preview.escapeHtml(text)}</li>`).join('')}</ul>` : ''}
+            ${kind === 'insufficient' ? '' : `<div class="prediction-scores">
+                <h4>Class probabilities</h4>
+                ${prediction.probabilities.map((item, i) => {
+                    const value = Math.round(item.p * 100);
+                    return `<div class="prediction-score ${i === 0 && confident ? 'is-leading' : ''}">
+                        <div><span>${preview.escapeHtml(item.label)}</span><span>${value}%</span></div>
+                        <div class="prediction-score-track"><span style="width:${value}%"></span></div>
+                    </div>`;
+                }).join('')}
+            </div>`}`;
+        updated.textContent = `Updated ${clock(prediction.time)}`;
+    }
+
+    function renderChecks(checks) {
+        if (!checks?.length || preview.isDemo) {
+            checksBox.hidden = true;
+            return;
+        }
+        const failed = checks.filter(item => !item.ok).length;
+        const warned = checks.filter(item => item.ok && item.warn).length;
+        checksBox.hidden = false;
+        checksBox.dataset.state = failed ? 'fail' : warned ? 'warn' : 'ok';
+        checksSummary.textContent = failed ? `Checks · ${failed} not passed` : warned ? `Checks · ${warned} with notes` : `Checks · all ${checks.length} passed`;
+        checksList.innerHTML = checks.map(item => {
+            const state = !item.ok ? 'fail' : item.warn ? 'warn' : 'ok';
+            const mark = state === 'ok' ? '✓' : state === 'warn' ? '!' : '✕';
+            return `<li class="is-${state}"><span class="prediction-check-mark" aria-hidden="true">${mark}</span>
+                <span><strong>${preview.escapeHtml(item.label)}</strong>${item.detail ? `<span>${preview.escapeHtml(item.detail)}</span>` : ''}</span></li>`;
+        }).join('');
+    }
+
+    // clean-air strip under the result
+    function renderReference(reference, calibration) {
+        const model = preview.activeModel();
+        if (!model) {
+            referenceBox.hidden = true;
+            return;
+        }
+        referenceBox.hidden = false;
+        const recording = calibration?.recording;
+        let title = 'None yet';
+        let note = 'Record clean air before predicting.';
+        let state = 'none';
+        if (reference?.source === 'device') {
+            state = 'device';
+            title = `Recorded on this board · ${day(reference.recorded_at)} ${clock(reference.recorded_at)}`;
+            note = reference.warnings?.length ? reference.warnings[0]
+                : `${reference.age_s < 60 ? 'Just now' : `${duration(reference.age_s)} ago`}. Record again after moving the board or changing rooms.`;
+        } else if (reference?.source === 'model') {
+            state = 'model';
+            title = `Stored in the model (${reference.board || 'training board'}${reference.recorded_at ? `, ${day(reference.recorded_at)}` : ''})`;
+            note = 'Older clean air from training. Recording it on this board gives better results.';
+        } else if (reference?.hint) {
+            note = reference.hint;
+        }
+        if (recording) {
+            state = 'recording';
+            title = `Recording clean air · ${duration(calibration.remaining_s)} left`;
+            note = 'Keep smells away from the sensors.';
+        }
+        const last = calibration?.last;
+        const message = actionMessage || (last && !recording ? { text: last.message, error: !last.ok } : null);
+        const canRecord = measuring && !actionBusy;
+        referenceBox.dataset.state = state;
+        referenceBox.innerHTML = `
+            <div class="prediction-reference-copy">
+                <span class="classifier-label">Clean-air reference</span>
+                <strong>${preview.escapeHtml(title)}</strong>
+                <span class="prediction-reference-note">${preview.escapeHtml(note)}</span>
+                ${message ? `<span class="prediction-reference-message ${message.error ? 'is-error' : ''}" role="status">${preview.escapeHtml(message.text)}</span>` : ''}
+            </div>
+            ${recording
+                ? `<button id="prediction-air-cancel" class="prediction-manage-button" type="button" ${actionBusy ? 'disabled' : ''}>Cancel</button>`
+                : `<button id="prediction-air-record" class="prediction-manage-button" type="button" ${canRecord ? '' : 'disabled'}
+                    title="${measuring ? 'Record 5 minutes of clean air' : 'Start a measurement first: the sensors only run while measuring'}">Record clean air</button>`}`;
     }
 
     async function request(url, options = {}) {
@@ -142,6 +297,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     result.addEventListener('click', event => {
         if (event.target.closest('#prediction-match-profiles')) openMatchDialog();
+        if (event.target.closest('#prediction-record-first')) openAirDialog();
+        if (event.target.closest('#prediction-air-cancel-main')) cancelRecording();
+        if (event.target.closest('#prediction-skip-warmup')) skipWarmup();
+    });
+    referenceBox.addEventListener('click', event => {
+        if (event.target.closest('#prediction-air-record')) openAirDialog();
+        if (event.target.closest('#prediction-air-cancel')) cancelRecording();
     });
     window.addEventListener('classifier-match-request', openMatchDialog);
     matchCancel.addEventListener('click', () => { if (!matchingProfiles) matchDialog.close(); });
@@ -191,53 +353,217 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function renderPrediction(model, unknown) {
+    // ---------- clean air ----------
+    function openAirDialog() {
+        if (!measuring || actionBusy) return;
+        airError.textContent = '';
+        airStart.disabled = false;
+        const remaining = preview.isDemo ? 0 : live?.measurement?.warmup_remaining_s || 0;
+        airWarning.hidden = remaining <= 0;
+        airWarning.textContent = remaining > 0
+            ? `The sensors are still warming up (${duration(remaining)} left). Clean air recorded now may not match the warmed-up sensors. For the best reference, wait until warm-up ends.`
+            : '';
+        airDialog.showModal();
+        airStart.focus();
+    }
+
+    document.getElementById('air-cancel').addEventListener('click', () => airDialog.close());
+    airForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        airStart.disabled = true;
+        airError.textContent = '';
+        try {
+            if (preview.isDemo) {
+                demoRecordingUntil = Date.now() + 6000;
+            } else {
+                await preview.api('/api/calibration/start', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ duration_seconds: 300 })
+                });
+                actionMessage = null;
+                await poll();
+            }
+            airDialog.close();
+        } catch (error) {
+            airError.textContent = error.message;
+        } finally {
+            airStart.disabled = false;
+            render();
+        }
+    });
+
+    async function cancelRecording() {
+        if (actionBusy) return;
+        actionBusy = true;
+        render();
+        try {
+            if (preview.isDemo) demoRecordingUntil = null;
+            else {
+                await preview.api('/api/calibration/cancel', { method: 'POST' });
+                actionMessage = { text: 'Clean-air recording cancelled. The previous reference is kept.' };
+                await poll();
+            }
+        } catch (error) {
+            actionMessage = { text: error.message, error: true };
+        } finally {
+            actionBusy = false;
+            render();
+        }
+    }
+
+    async function skipWarmup() {
+        if (actionBusy) return;
+        actionBusy = true;
+        try {
+            await preview.api('/api/prediction/skip-warmup', { method: 'POST' });
+            await poll();
+        } catch (error) {
+            actionMessage = { text: error.message, error: true };
+        } finally {
+            actionBusy = false;
+            render();
+        }
+    }
+
+    // ---------- device polling ----------
+    async function poll() {
+        if (preview.isDemo) return;
+        try {
+            live = await preview.api('/api/prediction', {}, 5000);
+            liveError = '';
+            if (live.running && !measuring) measuring = true;
+        } catch (error) {
+            liveError = error.message;
+        }
+        render();
+    }
+
+    function schedulePolling() {
+        clearTimeout(liveTimer);
+        if (preview.isDemo) return;
+        const delay = document.hidden ? 30000 : measuring ? 3000 : 15000;
+        liveTimer = setTimeout(async () => {
+            if (!document.hidden) await poll();
+            schedulePolling();
+        }, delay);
+    }
+
+    function renderLive(model) {
+        if (!live) {
+            renderState(liveError ? 'disconnected' : 'loading', model, liveError || 'Reading the classifier status.');
+            return;
+        }
+        const s = live;
+        const remaining = s.measurement?.warmup_remaining_s;
+        switch (s.state) {
+            case 'no_model':
+                renderState('inactive', model);
+                break;
+            case 'incompatible':
+                renderMismatch(model, { issues: s.issues || [] });
+                break;
+            case 'idle':
+                renderState('idle', model);
+                break;
+            case 'starting':
+                renderState('starting', model);
+                break;
+            case 'warming': {
+                const total = s.measurement?.warmup_s || model.warmup_seconds || 900;
+                renderState('warming', model, null, {
+                    progress: (1 - remaining / total) * 100,
+                    note: `${duration(remaining)} left of ${duration(total)}`,
+                    actions: `<button id="prediction-skip-warmup" class="classifier-text-link prediction-link-button" type="button">Predict now, without waiting</button>`
+                });
+                break;
+            }
+            case 'calibrating': {
+                const cal = s.calibration || {};
+                renderState('calibrating', model, null, {
+                    progress: cal.duration_s ? (1 - cal.remaining_s / cal.duration_s) * 100 : 5,
+                    note: cal.recording ? `${duration(cal.remaining_s)} left` : 'Saving…',
+                    actions: `<button id="prediction-air-cancel-main" class="classifier-text-link prediction-link-button" type="button">Cancel recording</button>`
+                });
+                break;
+            }
+            case 'no_reference':
+                renderState('no_reference', model, s.message, {
+                    actions: `<div class="prediction-mismatch-actions">
+                        <button id="prediction-record-first" class="btn btn-primary" type="button" ${actionBusy ? 'disabled' : ''}>Record clean air</button>
+                        <a class="classifier-text-link" href="${pageLink('classifier.html')}">Set which board this is</a>
+                    </div>`
+                });
+                break;
+            case 'collecting': {
+                const total = model.window_seconds || 120;
+                const left = s.collecting_remaining_s ?? total;
+                renderState('collecting', model, null, {
+                    progress: (1 - left / total) * 100, note: `First prediction in about ${duration(left)}`
+                });
+                break;
+            }
+            case 'no_data':
+                renderState('no_data', model, s.message);
+                break;
+            case 'error':
+                renderState('error', model, s.message);
+                break;
+            default:
+                if (s.result) renderResult(s.result, model);
+                else renderState('analysing', model);
+        }
+    }
+
+    function demoPrediction(model, unknown) {
         const labels = model.classes.slice(0, 4);
         const preferred = labels.find(label => label.toLowerCase() === 'food') || labels[0];
         const ranked = [preferred, ...labels.filter(label => label !== preferred)];
         const scores = unknown ? [38, 29, 20, 13] : [86, 8, 4, 2];
-        // keep demo probabilities consistent when a model has fewer classes
         if (ranked.length === 1) scores[0] = unknown ? 38 : 100;
         else scores[ranked.length - 1] += scores.slice(ranked.length).reduce((sum, value) => sum + value, 0);
-        result.dataset.state = unknown ? 'unknown' : 'ready';
-        result.innerHTML = `
-            <div class="prediction-summary ${unknown ? 'is-unknown' : ''}">
-                <div>
-                    <span class="classifier-label">${unknown ? 'No confident match' : 'Predicted smell'}</span>
-                    <h2>${unknown ? 'Unknown' : preview.escapeHtml(preferred)}</h2>
-                </div>
-                <div class="prediction-confidence">
-                    <strong>${scores[0]}<span>%</span></strong>
-                    <span>${unknown ? 'Top score' : 'Model confidence'}</span>
-                </div>
-            </div>
-            <p class="prediction-explanation">${unknown ? 'The pattern does not have a confident match. Recording continues.' : 'A stable match across the latest analysis window.'}</p>
-            <div class="prediction-scores">
-                <h4>Class probabilities</h4>
-                ${ranked.map((label, i) => `
-                    <div class="prediction-score ${i === 0 && !unknown ? 'is-leading' : ''}">
-                        <div><span>${preview.escapeHtml(label)}</span><span>${scores[i]}%</span></div>
-                        <div class="prediction-score-track"><span style="width:${scores[i]}%"></span></div>
-                    </div>`).join('')}
-            </div>`;
-        updated.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+        return {
+            state: unknown ? 'unknown' : 'ready', label_text: preferred, top_text: preferred,
+            confidence: scores[0] / 100, window_seconds: model.window_seconds, time: new Date().toISOString(),
+            probabilities: ranked.map((label, i) => ({ label, p: scores[i] / 100 })), warnings: []
+        };
     }
 
     function render() {
         const model = preview.activeModel();
+        const loading = preview.modelsStatus();
         document.getElementById('prediction-model-name').textContent = model ? `${model.name} · v${model.version}` : 'No model selected';
-        windowLabel.textContent = model ? `${model.window_seconds}s window · every ${model.prediction_interval_seconds}s` : '';
+        windowLabel.textContent = model ? `${model.window_seconds} s window · every ${model.prediction_interval_seconds} s` : '';
+        if (!preview.isDemo) {
+            renderReference(live?.reference, live?.calibration);
+            renderChecks(model && live?.model?.id === model.id ? live.checks : null);
+        } else {
+            const recording = demoRecordingUntil && Date.now() < demoRecordingUntil;
+            if (demoRecordingUntil && !recording) {
+                demoRecordingUntil = null;
+                demoReference = { source: 'device', recorded_at: new Date().toISOString(), warnings: [] };
+            }
+            renderReference(demoState === 'no_reference' ? { source: 'none' } : demoReference,
+                { recording, remaining_s: recording ? Math.ceil((demoRecordingUntil - Date.now()) / 1000) * 50 : 0 });
+            checksBox.hidden = true;
+        }
         if (!model) {
-            renderState(preview.read().models.length ? 'inactive' : 'no_model');
+            if (loading.status === 'loading') renderState('loading', null);
+            else if (loading.status === 'unavailable') renderState('disconnected', null, loading.message);
+            else renderState(preview.read().models.length ? 'inactive' : 'no_model');
         } else if (!preview.compatibility(model).compatible) {
             const check = preview.compatibility(model);
             renderState(check.status === 'mismatch' ? 'incompatible' : check.status, model, check.message);
         } else if (!measuring && !previewOverride) {
             renderState('idle', model);
         } else if (!preview.isDemo) {
-            renderState('disconnected', model);
+            renderLive(model);
+        } else if (demoRecordingUntil) {
+            renderState('calibrating', model, null, { progress: 100 - (demoRecordingUntil - Date.now()) / 60, note: 'Demo recording' });
         } else if (demoState === 'ready' || demoState === 'unknown') {
-            renderPrediction(model, demoState === 'unknown');
+            renderResult(demoPrediction(model, demoState === 'unknown'), model);
+        } else if (demoState === 'no_reference') {
+            renderState('no_reference', model, null, {
+                actions: `<div class="prediction-mismatch-actions"><button id="prediction-record-first" class="btn btn-primary" type="button">Record clean air</button></div>`
+            });
         } else {
             renderState(demoState, model);
         }
@@ -253,6 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const wasMeasuring = measuring;
         measuring = event.detail.running;
         previewOverride = false;
+        actionMessage = null;
         preview.refreshConfiguration();
         if (preview.isDemo) {
             if (measuring && !wasMeasuring) {
@@ -261,13 +588,18 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (!measuring) {
                 demoStartedAt = null;
                 demoState = 'idle';
+                demoRecordingUntil = null;
             }
             stateSelect.value = demoState;
+        } else {
+            poll();
+            schedulePolling();
         }
         render();
     });
     if (preview.isDemo) {
         setInterval(() => {
+            if (demoRecordingUntil) { render(); return; }
             if (!measuring || !demoStartedAt) return;
             const elapsed = Date.now() - demoStartedAt;
             const nextState = elapsed < 3000 ? 'warming' : elapsed < 6000 ? 'collecting' : 'ready';
@@ -284,9 +616,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     render();
     preview.refreshConfiguration();
-    window.addEventListener('focus', () => preview.refreshConfiguration());
+    poll();
+    schedulePolling();
+    window.addEventListener('focus', () => { preview.refreshConfiguration(); preview.refreshModels(); });
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) preview.refreshConfiguration();
+        if (!document.hidden) {
+            preview.refreshConfiguration();
+            poll();
+            schedulePolling();
+        }
     });
     if (!preview.isDemo) setInterval(() => {
         if (!document.hidden) preview.refreshConfiguration();

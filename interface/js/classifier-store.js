@@ -1,4 +1,4 @@
-// model metadata is saved locally until the device API is connected
+// models live on the device (demo mode keeps them in this browser)
 window.ClassifierPreview = (() => {
     const storageKey = 'bmeClassifierPreviewV1';
     const sessionKey = 'bmeAcquisitionPreviewV1';
@@ -68,7 +68,12 @@ window.ClassifierPreview = (() => {
         });
     });
 
+    // device models: loaded from /api/models and kept here
+    let deviceModels = { status: 'loading', models: [], activeId: null, message: '' };
+    let modelsRequest = null;
+
     function read() {
+        if (!isDemo) return { models: deviceModels.models, activeId: deviceModels.activeId };
         try {
             const value = JSON.parse(localStorage.getItem(storageKey));
             if (Array.isArray(value?.models)) return value;
@@ -79,6 +84,110 @@ window.ClassifierPreview = (() => {
     function save(state) {
         localStorage.setItem(storageKey, JSON.stringify(state));
         window.dispatchEvent(new Event('classifier-preview-change'));
+    }
+
+    // fetch with a timeout; device errors come back as { status: 'error', message }
+    async function api(url, options = {}, timeoutMs = 8000) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(url, { ...options, signal: controller.signal, cache: 'no-store' });
+            let payload = null;
+            try { payload = await response.json(); } catch (error) {}
+            if (!response.ok || payload?.status === 'error') {
+                throw new Error(payload?.message || payload?.detail || 'The device could not complete the request.');
+            }
+            return payload;
+        } catch (error) {
+            if (error.name === 'AbortError') throw new Error('The device did not respond. Check the Wi-Fi connection and try again.');
+            if (error instanceof TypeError) throw new Error('Cannot reach the device. Check the Wi-Fi connection and try again.');
+            throw error;
+        } finally { clearTimeout(timeout); }
+    }
+
+    function publishModels(next) {
+        deviceModels = { ...deviceModels, ...next };
+        window.dispatchEvent(new Event('classifier-preview-change'));
+    }
+
+    async function loadModels() {
+        try {
+            const payload = await api('/api/models');
+            if (!Array.isArray(payload?.models)) throw new Error('The device sent an unexpected model list.');
+            publishModels({ status: 'ready', models: payload.models, activeId: payload.active_id || null, message: '' });
+        } catch (error) {
+            publishModels({ status: 'unavailable', message: error.message });
+        }
+    }
+
+    function refreshModels() {
+        if (isDemo) return Promise.resolve();
+        if (!modelsRequest) modelsRequest = loadModels().finally(() => { modelsRequest = null; });
+        return modelsRequest;
+    }
+
+    function modelsStatus() {
+        return isDemo ? { status: 'ready', message: '' } : { status: deviceModels.status, message: deviceModels.message };
+    }
+
+    // add, select and remove go to the device; the demo keeps using browser storage
+    async function addModel(text, file, parsed) {
+        if (isDemo) {
+            const state = read();
+            state.models.push(parsed);
+            if (!state.activeId) state.activeId = parsed.id;
+            save(state);
+            return parsed;
+        }
+        const payload = await api(`/api/models?filename=${encodeURIComponent(file.name)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text
+        }, 20000);
+        await refreshModels();
+        return payload.model;
+    }
+
+    async function selectModel(id) {
+        if (isDemo) {
+            const state = read();
+            state.activeId = id;
+            save(state);
+            return;
+        }
+        await api('/api/models/active', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+        });
+        await refreshModels();
+    }
+
+    async function removeModel(id) {
+        if (isDemo) {
+            const state = read();
+            state.models = state.models.filter(model => model.id !== id);
+            if (state.activeId === id) state.activeId = null;
+            save(state);
+            return;
+        }
+        await api(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        await refreshModels();
+    }
+
+    // which board this is: picks the model's stored clean air when none was recorded here
+    let demoBoard = 'bme1';
+    async function boardName() {
+        if (isDemo) return { board_name: demoBoard, source: 'saved' };
+        return api('/api/device');
+    }
+
+    async function saveBoardName(name) {
+        if (isDemo) { demoBoard = name; return { board_name: name, source: 'saved' }; }
+        return api('/api/device', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ board_name: name || null })
+        });
+    }
+
+    function classLabel(name) {
+        const text = String(name).replace(/_/g, ' ').trim();
+        return text.charAt(0).toUpperCase() + text.slice(1);
     }
 
     function seedDemoModels() {
@@ -337,6 +446,8 @@ window.ClassifierPreview = (() => {
 
     if (isDemo) {
         try { seedDemoModels(); } catch (error) {}
+    } else {
+        refreshModels();
     }
 
     window.addEventListener('storage', event => {
@@ -346,6 +457,7 @@ window.ClassifierPreview = (() => {
     return {
         isDemo, showControls, read, save, activeModel, readSession, saveSession, escapeHtml, formatSize,
         refreshConfiguration, saveDemoConfiguration, configuration: () => configState,
-        validRequirements, expandRequirements, compatibility, profileGroups, configurationForModel
+        validRequirements, expandRequirements, compatibility, profileGroups, configurationForModel,
+        api, refreshModels, modelsStatus, addModel, selectModel, removeModel, boardName, saveBoardName, classLabel
     };
 })();

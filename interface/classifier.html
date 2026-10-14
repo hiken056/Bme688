@@ -36,7 +36,7 @@
                 <div class="classifier-page-header">
                     <div>
                         <h1 id="classifier-heading">Classifier</h1>
-                        <p>Choose a model for live smell predictions.</p>
+                        <p>Choose the model this device uses for live smell predictions.</p>
                     </div>
                 </div>
 
@@ -90,7 +90,12 @@
                                 <small>Maximum 5 MiB</small>
                                 <input id="classifier-file" type="file" accept=".json,application/json">
                             </label>
-                            <p class="classifier-profile-note classifier-upload-note">Include profile_requirements with each profile's settings and sensor count. Sensor positions are matched automatically.</p>
+                            <p class="classifier-profile-note classifier-upload-note">Use the JSON file exported by the notebook. It is checked and stored on this device, so every phone sees the same models.</p>
+                        </div>
+                        <div class="classifier-board">
+                            <label for="classifier-board">This board</label>
+                            <select id="classifier-board"><option value="">Not set</option></select>
+                            <p id="classifier-board-note" class="classifier-profile-note"></p>
                         </div>
                     </section>
                 </div>
