@@ -28,7 +28,9 @@ BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
 INTERFACE_DIR = PROJECT_DIR / "interface"
 SENSOR_DIR = PROJECT_DIR / "bme-code"
-SENSOR_BINARY = SENSOR_DIR / "main"
+# BME_SENSOR_BINARY lets a computer without sensors run tools/replay_sensor.py instead
+SENSOR_BINARY = Path(os.environ.get("BME_SENSOR_BINARY", SENSOR_DIR / "main"))
+SENSOR_COMMAND = str(SENSOR_BINARY) if "BME_SENSOR_BINARY" in os.environ else "./main"
 MEASUREMENTS_DIR = Path(
     os.environ.get("BME_MEASUREMENTS_DIR", SENSOR_DIR / "measurements")
 )
@@ -318,6 +320,8 @@ def sync_time(data: TimeSync):
     # moving the clock during a measurement would break the time stamps the classifier relies on
     if sensor_is_running():
         return {"status": "skipped", "message": "Clock not changed during a measurement"}
+    if os.environ.get("BME_SKIP_CLOCK_SYNC") == "1":  # local testing: never touch the computer's clock
+        return {"status": "skipped", "message": "Clock sync disabled"}
     timestamp_sec = data.timestamp_ms / 1000.0
     try:
         subprocess.run(["sudo", "date", "-s", f"@{timestamp_sec}"], check=True)
@@ -497,7 +501,7 @@ def start_sensor(request: StartSensorRequest):
             sensor_env = os.environ.copy()
             sensor_env["BME_MEASUREMENT_DIR"] = str(measurement_dir)
             sensor_process = subprocess.Popen(
-                ["./main", str(file_duration_minutes)],
+                [SENSOR_COMMAND, str(file_duration_minutes)],
                 cwd=SENSOR_DIR,
                 env=sensor_env,
                 stdout=log_file,
@@ -516,7 +520,8 @@ def start_sensor(request: StartSensorRequest):
             "pid": sensor_process.pid,
             "file_duration_minutes": file_duration_minutes,
             "measurement_title": measurement_title,
-            "measurement_path": str(measurement_dir.relative_to(SENSOR_DIR)),
+            "measurement_path": (str(measurement_dir.relative_to(SENSOR_DIR))
+                                 if measurement_dir.is_relative_to(SENSOR_DIR) else str(measurement_dir)),
         }
     except Exception as e:
         with open("/tmp/bme_log.txt", "a") as f:
