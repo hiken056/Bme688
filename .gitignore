@@ -10,7 +10,9 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-ml/
 venv/
+.ipynb_checkpoints/
 
 # local settings
 .env
@@ -30,3 +32,10 @@ masuratori/
 # local photos
 *.heic
 *.HEIC
+
+# local interface test kit and its output
+tools/
+local_test/
+
+# classifier course (personal notes)
+curs_clasificatori/
