@@ -1,14 +1,8 @@
-"""Smell classifier on the device: model storage, clean-air reference and live predictions.
-
-Plain Python (no numpy), so it runs on a Pi Zero without extra packages.
-The features must be computed exactly like clasificator/smell_classifier.py:
-tests/test_classifier_parity.py compares the two on recorded sessions.
-"""
+# features must match the notebook, see tests/test_classifier_parity.py
 import json
 import math
 import os
 import re
-import socket
 import tempfile
 import threading
 import time
@@ -20,24 +14,23 @@ MAX_MODEL_BYTES = 5 * 1024 * 1024
 SUPPORTED_TYPES = {"multinomial_logistic_regression"}
 FEATURE_RE = re.compile(r"^(?P<profile>.+)_shape_s(?P<step>\d)$")
 SENSOR_FILE_RE = re.compile(r"^sensor(\d)_.*\.csv$")
-REFERENCE_KEY_RE = re.compile(r"^sensor([1-8])_(.+)$")
 RUN_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(\d+)min(?:_\d+)?$")
 
-DEFAULT_CLIP_OHM = 1.02e8      # readings at the sensor maximum carry no information
-TICK_S = 0.14                  # heater time base in parallel mode (139 ms measured)
-KEEP_MS = 20 * 60 * 1000       # cycles kept in memory per sensor
+DEFAULT_CLIP_OHM = 1.02e8      # sensor maximum, carries no information
+TICK_S = 0.14                  # heater time base in parallel mode
+KEEP_MS = 20 * 60 * 1000       # cycles kept per sensor
 LOOP_SECONDS = 3
 
-# limits measured on the training data
-UNUSUAL_Z = 5.0                # no training window had a value further than 4 standard deviations
-UNUSUAL_COUNT = 3              # this many values beyond UNUSUAL_Z means the pattern is new to the model
-MAX_MISSING_FRACTION = 0.25    # more missing heater steps than this: no prediction
-MIN_CYCLE_FRACTION = 0.5       # a window needs at least half of the expected heater cycles
+# limits from the training data
+UNUSUAL_Z = 5.0                # no training window went past 4
+UNUSUAL_COUNT = 3
+MAX_MISSING_FRACTION = 0.25
+MIN_CYCLE_FRACTION = 0.5
 
 # clean air
 CALIBRATION_SECONDS = 300
 CALIBRATION_MIN_CYCLES = 3
-CALIBRATION_STABLE = 0.15      # change between the two halves; clean air after warm-up stays below 0.1
+CALIBRATION_STABLE = 0.15      # clean air after warm-up stays below 0.1
 REFERENCE_FRESH_HOURS = 12
 
 
@@ -45,7 +38,7 @@ class ModelError(ValueError):
     pass
 
 
-# ---------- small helpers ----------
+# helpers
 
 def write_json_atomic(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +87,7 @@ def nice_class(name: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-# ---------- model validation ----------
+# model validation
 
 def _text(value, name, required=True, maximum=200):
     if value is None and not required:
@@ -144,7 +137,6 @@ def _requirement(item):
 
 
 def validate_model(payload) -> dict:
-    """Check a model file completely and return the parts the device uses."""
     if not isinstance(payload, dict):
         raise ModelError("The file must contain a JSON object.")
     meta, model = payload.get("metadata"), payload.get("model")
@@ -202,7 +194,7 @@ def validate_model(payload) -> dict:
     scale = _numbers(model.get("scaler_scale"), count, "scaler_scale")
     if any(v <= 0 for v in scale):
         raise ModelError("scaler_scale values must be greater than zero.")
-    # scikit-learn sorts the classes: the weight rows follow model.classes, not the metadata order
+    # scikit-learn sorts the classes, so coef follows model.classes
     model_classes = model.get("classes", classes)
     if not isinstance(model_classes, list) or sorted(model_classes) != sorted(classes):
         raise ModelError("The classes in metadata and model are different.")
@@ -216,22 +208,6 @@ def validate_model(payload) -> dict:
     unknown_below = _number(model.get("unknown_below"), "unknown_below", 0, 1, default=0.6)
     clip = _number(model.get("clip_ohm"), "clip_ohm", 1, 1e12, default=DEFAULT_CLIP_OHM)
 
-    references = {}
-    raw_refs = payload.get("clean_air_reference") or {}
-    if not isinstance(raw_refs, dict):
-        raise ModelError("clean_air_reference must be an object with one entry per board.")
-    for board, entry in raw_refs.items():
-        if not isinstance(entry, dict) or not isinstance(entry.get("ln_r0"), dict):
-            raise ModelError(f"clean_air_reference for {board} needs ln_r0 values.")
-        values = {}
-        for key, steps in entry["ln_r0"].items():
-            match = REFERENCE_KEY_RE.match(key)
-            if (not match or not isinstance(steps, list) or len(steps) != 10 or
-                    not all(v is None or finite(v) for v in steps)):
-                raise ModelError(f"clean_air_reference {board}/{key} must hold 10 values.")
-            values[(int(match.group(1)), match.group(2))] = [None if v is None else float(v) for v in steps]
-        references[str(board)] = {"recorded_at": entry.get("recorded_at"), "ln_r0": values}
-
     training = payload.get("training") if isinstance(payload.get("training"), dict) else {}
     accuracy = {key: training.get(f"balanced_accuracy_{key}") for key in ("unseen_board", "unseen_session")
                 if finite(training.get(f"balanced_accuracy_{key}"))}
@@ -241,12 +217,12 @@ def validate_model(payload) -> dict:
         "window_seconds": window, "warmup_seconds": warmup, "prediction_interval_seconds": interval,
         "requirements": requirements, "features": list(features), "steps_by_profile": steps_by_profile,
         "impute": impute, "mean": mean, "scale": scale, "coef": coef, "intercept": intercept,
-        "unknown_below": unknown_below, "clip_ohm": clip, "references": references,
+        "unknown_below": unknown_below, "clip_ohm": clip,
         "accuracy": accuracy, "sessions": training.get("sessions") if finite(training.get("sessions")) else None,
     }
 
 
-# ---------- model storage ----------
+# model storage
 
 class ModelStore:
     def __init__(self, state_dir: Path):
@@ -320,7 +296,6 @@ class ModelStore:
 
 
 def summary(model: dict) -> dict:
-    """What the interface needs to show and check a model."""
     sensors, sensor_profiles = [], {}
     for req in model["requirements"]:
         for _ in range(req["count"]):
@@ -336,16 +311,14 @@ def summary(model: dict) -> dict:
         "window_seconds": model["window_seconds"], "warmup_seconds": model["warmup_seconds"],
         "prediction_interval_seconds": model["prediction_interval_seconds"],
         "feature_count": len(model["features"]), "unknown_below": model["unknown_below"],
-        "references": [{"board": board, "recorded_at": ref.get("recorded_at")} for board, ref in model["references"].items()],
         "accuracy": model["accuracy"], "sessions": model["sessions"],
         "size_bytes": model["size_bytes"], "filename": model["filename"], "uploaded_at": model["uploaded_at"],
     }
 
 
-# ---------- sensor setup ----------
+# sensor setup
 
 def sensor_setup(config) -> dict:
-    """Physical sensor -> the heater profile it is running, from the saved configuration."""
     setup = {}
     if not isinstance(config, dict):
         return setup
@@ -365,7 +338,7 @@ def sensor_setup(config) -> dict:
 
 
 def match_sensors(model: dict, setup: dict):
-    """Model profile -> physical sensors with identical settings (same rule as the interface)."""
+    # same matching rule as the interface
     used, mapping, issues = set(), {}, []
     for req in model["requirements"]:
         signature = profile_signature(req)
@@ -378,10 +351,10 @@ def match_sensors(model: dict, setup: dict):
     return mapping, issues
 
 
-# ---------- reading the measurement files ----------
+# measurement files
 
+# reads a growing csv and keeps complete heater cycles
 class CycleReader:
-    """Reads one sensor CSV as it grows and keeps complete heater cycles: (t0_ms, [ln R per step])."""
 
     def __init__(self, path: Path, clip_ohm: float):
         self.path, self.clip = path, clip_ohm
@@ -433,21 +406,21 @@ class CycleReader:
         return self.cycles
 
 
+# one measurement can span several run folders
 class LiveData:
-    """All sensor files of the running measurement (it may span several run folders)."""
 
     def __init__(self, measurements_dir: Path, session_path: Path, clip_ohm=DEFAULT_CLIP_OHM):
         self.root, self.session_path, self.clip = measurements_dir, session_path, clip_ohm
         self.readers, self.key = {}, None
         self.runs, self.first_t = [], None
-        self.retired = set()   # files of older run folders, already read and dropped from memory
+        self.retired = set()   # older files, already read
 
     def _session_runs(self):
         session = read_json(self.session_path, {}) or {}
         title_dir = Path(session["title_dir"]) if session.get("title_dir") else None
         started = session.get("started_at")
         if title_dir is None:
-            # fall back to the newest run folder on the device
+            # no session file, use the newest run folder
             candidates = [r for r in self.root.glob("*/*") if r.is_dir() and RUN_RE.match(r.name)] if self.root.exists() else []
             if not candidates:
                 return None, []
@@ -482,7 +455,7 @@ class LiveData:
         self.runs = runs
         for index, run in enumerate(runs):
             if index < len(runs) - 3:
-                continue  # older folders: only the newest ones hold the cycles a window needs
+                continue  # a window only needs the newest folders
             try:
                 files = [f for f in run.iterdir() if SENSOR_FILE_RE.match(f.name)]
             except OSError:
@@ -497,7 +470,7 @@ class LiveData:
                 elif index >= len(runs) - 2:
                     reader.update()
         if self.first_t is None and runs:
-            # the start of the measurement, for the warm-up
+            # measurement start, for the warm-up
             firsts = []
             for csv_path in (f for f in runs[0].iterdir() if SENSOR_FILE_RE.match(f.name)):
                 reader = self.readers.get(csv_path)
@@ -529,10 +502,10 @@ class LiveData:
         return self.runs[-1] if self.runs else None
 
 
-# ---------- features and model ----------
+# features and model
 
 def window_features(model: dict, mapping: dict, cycles: dict, refs: dict, t_end: int) -> tuple:
-    """The model's features for the window (t_end - window, t_end], plus cycle counts per profile."""
+    # same window rule as the notebook
     low = t_end - model["window_seconds"] * 1000
     values, counts = {}, {}
     for profile, steps in model["steps_by_profile"].items():
@@ -566,7 +539,7 @@ def classify(model: dict, values: dict) -> dict:
             value = model["impute"][j]
         x.append((value - model["mean"][j]) / model["scale"][j])
     logits = [b + sum(w * v for w, v in zip(row, x)) for row, b in zip(model["coef"], model["intercept"])]
-    if len(logits) == 1:  # binary logistic regression stores one row
+    if len(logits) == 1:  # binary models store one row
         p = 1 / (1 + math.exp(-logits[0]))
         probabilities = [1 - p, p]
     else:
@@ -577,45 +550,31 @@ def classify(model: dict, values: dict) -> dict:
     return {"probabilities": probabilities, "missing": missing, "unusual": far, "max_z": max(abs(v) for v in x)}
 
 
-# ---------- the live predictor ----------
+# live predictor
 
 class Predictor:
     def __init__(self, state_dir: Path, measurements_dir: Path, session_path: Path, is_running, read_config):
         self.state_dir = state_dir
         self.store = ModelStore(state_dir)
         self.calibration_path = state_dir / "calibration.json"
-        self.device_path = state_dir / "device.json"
         self.data = LiveData(measurements_dir, session_path)
         self.session_path = session_path
         self.is_running, self.read_config = is_running, read_config
         self.lock = threading.Lock()
         self.result = None
-        self.result_checks = []        # window and pattern checks of the last prediction
+        self.result_checks = []        # checks of the last prediction
         self.status_cache = None
-        self.recording = None          # clean-air recording in progress
-        self.last_calibration = None   # outcome of the last recording (shown once)
+        self.recording = None
+        self.last_calibration = None   # outcome of the last recording
         self.skip_warmup_key = None
         self.last_prediction_t = None
         self.thread = None
         self.stop_event = threading.Event()
 
-    # --- device settings ---
-    def board_name(self):
-        saved = (read_json(self.device_path, {}) or {}).get("board_name")
-        if saved:
-            return saved, "saved"
-        match = re.search(r"bme688-0*(\d+)", socket.gethostname(), re.IGNORECASE)
-        return (f"bme{match.group(1)}", "hostname") if match else (None, None)
-
-    def set_board_name(self, name):
-        if name is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name):
-            raise ValueError("Use 1 to 32 letters, numbers, - or _.")
-        write_json_atomic(self.device_path, {"board_name": name})
-
     def calibration(self):
         return read_json(self.calibration_path)
 
-    # --- background loop ---
+    # background loop
     def start(self):
         if self.thread:
             return
@@ -672,7 +631,7 @@ class Predictor:
             status["calibration"] = self._calibration_view()
             return status
 
-    # --- reference ---
+    # clean-air reference
     def _resolve_reference(self, model, mapping, setup, now_ms):
         cal = self.calibration()
         warnings = []
@@ -694,28 +653,11 @@ class Predictor:
                 warnings.extend(cal.get("warnings") or [])
                 return refs, {"source": "device", "recorded_at": cal.get("recorded_at"),
                               "age_s": max(0, round((now_ms - cal.get("recorded_ms", now_ms)) / 1000)),
-                              "label": "Recorded on this board", "warnings": warnings}
-        board, _ = self.board_name()
-        stored = model["references"].get(board) if board else None
-        if stored:
-            refs = {}
-            for profile, sensors in mapping.items():
-                for sensor in sensors:
-                    values = stored["ln_r0"].get((sensor, profile))
-                    if values:
-                        refs[sensor] = values
-            if all(any(s in refs for s in sensors) for sensors in mapping.values()):
-                date = (stored.get("recorded_at") or "")[:10]
-                warnings.append(f"Using the clean air stored in the model ({board}{', ' + date if date else ''}). "
-                                "Record clean air on this board for better results.")
-                return refs, {"source": "model", "recorded_at": stored.get("recorded_at"), "board": board,
-                              "label": f"Stored in the model ({board})", "warnings": warnings}
-        hint = ("Record clean air on this board first." if not model["references"] else
-                f"Record clean air on this board, or set which board this is (the model has clean air for "
-                f"{', '.join(model['references'])}).")
+                              "label": "Recorded on this device", "warnings": warnings}
+        hint = "Record clean air before predicting: the model compares every smell with clean air from these sensors."
         return None, {"source": "none", "label": "No clean-air reference", "warnings": [], "hint": hint}
 
-    # --- status and checks ---
+    # status and checks
     def _status(self, model, running, now_ms=None):
         now_ms = now_ms or int(time.time() * 1000)
         status = {"status": "success", "running": running, "model": None, "checks": [], "warnings": []}
@@ -774,12 +716,12 @@ class Predictor:
         if refs is None:
             status.update(state="no_reference", message=reference["hint"])
             return status
-        window_ready_at = (first_t + (warmup if not skipped else 0) * 1000) + model["window_seconds"] * 1000
+        window_ready_at = first_t + (warmup if not skipped else 0) * 1000 + model["window_seconds"] * 1000
         if last_t < window_ready_at:
             status.update(state="collecting", message="Collecting the first analysis window.",
                           collecting_remaining_s=round((window_ready_at - last_t) / 1000))
             return status
-        status["warnings"] = []  # reference notes are shown with the reference and in the checks
+        status["warnings"] = []  # reference notes are shown elsewhere
         if skipped and not warm:
             status["warnings"].append("Warm-up was skipped. Predictions during warm-up are often wrong.")
         interval_ms = model["prediction_interval_seconds"] * 1000
@@ -788,7 +730,7 @@ class Predictor:
                       _ctx={"mapping": mapping, "refs": refs, "setup": setup, "reference": reference})
         return status
 
-    # --- prediction ---
+    # prediction
     def _predict(self, model, status):
         ctx = status["_ctx"]
         mapping, refs, setup = ctx["mapping"], ctx["refs"], ctx["setup"]
@@ -867,7 +809,7 @@ class Predictor:
         except OSError:
             pass
 
-    # --- clean-air recording ---
+    # clean-air recording
     def start_recording(self, duration_s=CALIBRATION_SECONDS, now_ms=None):
         if not self.is_running():
             raise ValueError("Start a measurement first: the sensors only run while measuring.")
@@ -900,7 +842,7 @@ class Predictor:
                         remaining_s=max(0, round((rec["end_ms"] - max(last_t, rec["start_ms"])) / 1000)))
         cal = self.calibration()
         if isinstance(cal, dict):
-            view["saved"] = {"recorded_at": cal.get("recorded_at"), "board": cal.get("board"),
+            view["saved"] = {"recorded_at": cal.get("recorded_at"),
                              "sensors": sorted(int(s) for s in (cal.get("sensors") or {})),
                              "warnings": cal.get("warnings") or [], "during_warmup": cal.get("during_warmup", False)}
         return view
@@ -944,9 +886,8 @@ class Predictor:
         during_warmup = bool(first_t and (rec["start_ms"] - first_t) / 1000 < warmup)
         if during_warmup:
             warnings.append("Clean air was recorded during warm-up, so it may not match the warmed-up sensors.")
-        board, _ = self.board_name()
         payload = {"recorded_at": iso(rec["end_ms"]), "recorded_ms": rec["end_ms"], "duration_s": rec["duration_s"],
-                   "board": board, "sensors": sensors, "warnings": warnings, "during_warmup": during_warmup,
+                   "sensors": sensors, "warnings": warnings, "during_warmup": during_warmup,
                    "stability": round(worst, 4)}
         write_json_atomic(self.calibration_path, payload)
         with self.lock:

@@ -31,7 +31,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score, confusion_matrix
-try:                                   # LightGBM if installed, otherwise scikit-learn's equivalent
+try:                                   # lightgbm if installed, otherwise scikit-learn
     from lightgbm import LGBMClassifier
     def make_boosting():
         return LGBMClassifier(n_estimators=200, learning_rate=0.05, num_leaves=7, max_depth=3,
@@ -53,7 +53,7 @@ except ImportError:
 # `Chibrituri_arse` (burnt) and `Haine_la_uscat` (laundry) are not bad smells, so they are left out.
 
 # %%
-ROOT = Path(os.environ.get('BME_ROOT', 'masuratori'))   # folder that contains bme1, bme2, bme4, teste_simultane
+ROOT = Path(os.environ.get('BME_ROOT', 'masuratori'))   # folder with bme1, bme2, bme4 and teste_simultane
 TRAIN_BOARDS = ['bme1', 'bme2', 'bme4']      # boards used for training
 TEST_BOARD = 'bme3'                          # board kept only for testing
 CLASSES = ['clean_air', 'spicy', 'bad_smell']
@@ -72,22 +72,22 @@ BAD_SMELL = {
     'bme2': ['Branza_telemea_puturoasa', 'Sosete_mirositoare'],
     'bme4': ['Burete_bucatarie_uzat', 'Ulei_industrial', 'WC_usa_inchisa_ventilator_off'],
 }
-CLEAN_AIR_FOLDERS = ['Test']                                      # long clean-air runs in bme1/bme2/bme4
+CLEAN_AIR_FOLDERS = ['Test']                                      # long clean-air runs
 CLEAN_AIR_TESTS = ['Test_2_aer_curat', 'Test_4_Aer_curat_LDO_3V3']  # all boards at the same time
 
-SKIP_MIN = 15          # warm-up: use the second measurement (the data after the first 15 minutes)
-USE_MAX_MIN = 60       # use at most 60 minutes, starting with the second measurement
-USE_MIN = 15           # how much of the second measurement to use, for files shorter than 15 min
+SKIP_MIN = 15          # warm-up, use the second measurement
+USE_MAX_MIN = 60       # at most 60 min from the second measurement
+USE_MIN = 15           # for files shorter than 15 min
 WINDOW_S = 120         # one example = 2 minutes
-CLIP_OHM = 1.02e8      # the sensor's maximum reading (102.4 MOhm); such readings carry no information
+CLIP_OHM = 1.02e8      # sensor maximum, carries no information
 PROFILES = ['hp_301_basic', 'hp_354_standard', 'hp_411_levels', 'hp_501_sweep']
-SHARED = ['hp_354_standard', 'hp_411_levels', 'hp_501_sweep']     # the profiles board 3 also runs
-# heater steps used per profile (the 100 C steps are often stuck at the maximum, so they are skipped)
+SHARED = ['hp_354_standard', 'hp_411_levels', 'hp_501_sweep']     # profiles board 3 also runs
+# 100 C steps often stay at the maximum, so they are skipped
 USE_STEPS = {'hp_301_basic': [2, 3, 4, 5, 6, 7, 8, 9], 'hp_354_standard': [0, 4, 5, 6, 7, 8, 9],
              'hp_411_levels': [1, 2, 3, 4, 5, 6, 7, 8, 9], 'hp_501_sweep': [0, 1, 2, 3, 4, 5, 6, 7, 9]}
-UNKNOWN_BELOW = 0.6    # answer "unknown" when the best probability is lower than this
+UNKNOWN_BELOW = 0.6    # below this the answer is unknown
 
-def nfc(s):            # macOS can store 'ă' differently; normalise names before comparing
+def nfc(s):            # macos can store 'ă' differently
     return unicodedata.normalize('NFC', s)
 
 # %% [markdown]
@@ -104,7 +104,7 @@ def nfc(s):            # macOS can store 'ă' differently; normalise names befor
 RUN_RE = re.compile(r'(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(\d+)min')
 
 def read_cycles(csv_path):
-    """Return a table with one row per complete heater cycle: time t_ms and ln(R) per step (NaN if clipped)."""
+    # one row per complete heater cycle, nan if clipped
     raw = csv_path.read_bytes().replace(b'\x00', b'').decode('latin1').splitlines()
     rows = []
     for line in raw[1:]:
@@ -122,7 +122,7 @@ def read_cycles(csv_path):
     return pd.DataFrame(cycles, columns=['t_ms'] + [f's{i}' for i in range(10)])
 
 def find_sessions(board, label_dir, cls, source):
-    """Group the run folders of one object into sessions and pick the warm-up-free part."""
+    # group runs into sessions and skip the warm-up
     runs = []
     for run in label_dir.iterdir():
         m = RUN_RE.match(run.name)
@@ -138,15 +138,15 @@ def find_sessions(board, label_dir, cls, source):
     out = []
     for s in sessions:
         start, dur = s[0][0], s[0][1]
-        if source == 'Test_1':                    # distances were recorded back to back with a warm sensor:
-            use_from = start + pd.Timedelta(minutes=2)   # skip only the first 2 minutes after moving the sample
+        if source == 'Test_1':                    # recorded back to back with a warm sensor
+            use_from = start + pd.Timedelta(minutes=2)   # skip only the first 2 minutes
             use_to = s[-1][0] + pd.Timedelta(minutes=s[-1][1]); files = [r[2] for r in s]
-        elif dur >= SKIP_MIN:                       # long files: from the second file on, at most 60 minutes
+        elif dur >= SKIP_MIN:                       # long files, second file on
             if len(s) < 2: continue
             use_from = s[1][0]
             use_to = min(s[-1][0] + pd.Timedelta(minutes=s[-1][1]), use_from + pd.Timedelta(minutes=USE_MAX_MIN))
             files = [r[2] for r in s[1:] if r[0] < use_to]
-        else:                                     # short files: minutes 15-30 of the session
+        else:                                     # short files, minutes 15-30
             use_from = start + pd.Timedelta(minutes=SKIP_MIN)
             use_to = use_from + pd.Timedelta(minutes=USE_MIN)
             files = [r[2] for r in s if r[0] + pd.Timedelta(minutes=r[1]) > use_from and r[0] < use_to]
@@ -165,18 +165,18 @@ for board in TRAIN_BOARDS:
         if cls and label_dir.is_dir():
             sessions += find_sessions(board, label_dir, cls, 'objects')
 for test in CLEAN_AIR_TESTS:
-    for board_dir in sorted((ROOT / 'teste_simultane' / test).iterdir()):
+    for board_dir in sorted(d for d in (ROOT / 'teste_simultane' / test).iterdir() if d.is_dir()):
         for label_dir in board_dir.iterdir():
             if label_dir.is_dir():
                 sessions += find_sessions(board_dir.name, label_dir, 'clean_air', test)
-# cinnamon at different distances: not used for training, only to test
-for board_dir in sorted((ROOT / 'teste_simultane' / 'Test_1_distanta_si_timp_achizitie').iterdir()):
-    for label_dir in sorted(board_dir.iterdir()):
+# cinnamon distances, only for testing
+for board_dir in sorted(d for d in (ROOT / 'teste_simultane' / 'Test_1_distanta_si_timp_achizitie').iterdir() if d.is_dir()):
+    for label_dir in sorted(d for d in board_dir.iterdir() if d.is_dir()):
         for s in find_sessions(board_dir.name, label_dir, 'spicy', 'Test_1'):
             sessions.append(s)
 
 def load_session(s):
-    """All cycles of one session inside the selected time range, one table per (sensor, profile)."""
+    # cycles in the selected range, per sensor and profile
     per_sensor = {}
     lo = s['use_from'].timestamp() * 1000; hi = s['use_to'].timestamp() * 1000
     for f in s['files']:
@@ -188,7 +188,7 @@ def load_session(s):
     out = {}
     for key, parts in per_sensor.items():
         c = pd.concat(parts, ignore_index=True).sort_values('t_ms', ignore_index=True)
-        # file names hold local time; timestamps hold local time too, so compare relative to the first file
+        # file names and timestamps are both local time
         t0 = c['t_ms'].min()
         offset = (s['use_from'] - datetime.strptime(RUN_RE.match(s['files'][0].name).group(1), '%Y-%m-%d_%H-%M-%S')).total_seconds() * 1000
         length = (s['use_to'] - s['use_from']).total_seconds() * 1000
@@ -228,7 +228,7 @@ calibrations = [r for r, s in zip(air_refs, [s for s in sessions if s['cls'] == 
 def reference_for(s):
     options = [r for r in calibrations if r[0] == s['board'] and r[2] != id(s)]
     if not options: return None
-    return min(options, key=lambda r: r[1])          # the first calibration of the board
+    return min(options, key=lambda r: r[1])          # first calibration of the board
 
 for s in sessions:
     ref = reference_for(s)
@@ -259,7 +259,7 @@ def features(s, profiles=PROFILES):
     blocks = []
     for prof in profiles:
         r = pd.concat(by_profile[prof]).groupby('w').mean()[USE_STEPS[prof]]
-        level = r.mean(axis=1)                     # overall level of the curve (not used as a feature)
+        level = r.mean(axis=1)                     # curve level, not used as a feature
         shape = r.sub(level, axis=0)
         shape.columns = [f'{prof}_shape_s{i}' for i in USE_STEPS[prof]]
         blocks.append(shape)

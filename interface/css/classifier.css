@@ -410,7 +410,7 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
 .prediction-panel summary:focus-visible,
 .mobile-nav-links a:focus-visible { outline: 2px solid var(--primary-h); outline-offset: 4px; }
 
-/* clean-air reference, checks and warnings */
+/* clean air and checks */
 .prediction-reference {
     display: flex;
     align-items: center;
@@ -423,8 +423,7 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
 .prediction-reference-copy { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
 .prediction-reference-copy strong { font-size: 0.82rem; font-weight: 500; overflow-wrap: anywhere; }
 .prediction-reference-note { color: var(--muted); font-size: 0.72rem; line-height: 1.55; }
-.prediction-reference[data-state="none"] strong,
-.prediction-reference[data-state="model"] .prediction-reference-note { color: #e0aa71; }
+.prediction-reference[data-state="none"] strong { color: #e0aa71; }
 .prediction-reference[data-state="recording"] strong { color: var(--primary-h); }
 .prediction-reference-message { color: var(--success); font-size: 0.72rem; line-height: 1.55; }
 .prediction-reference-message.is-error { color: #ed948c; }
@@ -487,10 +486,6 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
     font-family: inherit;
     cursor: pointer;
 }
-.classifier-board { display: grid; gap: 0.5rem; margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--glass-border); }
-.classifier-board label { color: var(--muted); font-size: 0.74rem; font-weight: 500; }
-.classifier-board select { width: 100%; min-height: 44px; }
-.classifier-board .classifier-profile-note { margin-top: 0; }
 .air-steps { display: grid; gap: 0.45rem; padding-left: 1.1rem; color: var(--muted); font-size: 0.78rem; line-height: 1.55; }
 .session-form > p.air-warning { padding: 0.75rem; border: 1px solid rgba(224,170,113,0.25); border-radius: 8px; color: #e0aa71; font-size: 0.75rem; line-height: 1.6; }
 .session-form > p.air-warning[hidden] { display: none; }

@@ -1,11 +1,5 @@
-"""The device must compute exactly the same features and probabilities as the notebook.
-
-Runs the notebook's own functions (read from clasificator/smell_classifier.py) and the device code
-(backend/classifier.py) on the same recorded sessions and compares every window.
-
-Needs the training data and pandas/numpy/scikit-learn (the .venv-ml environment):
-    BME_ROOT=masuratori python -m unittest tests.test_classifier_parity
-"""
+# the device must match the notebook; needs the data and .venv-ml
+# BME_ROOT=masuratori python -m unittest tests.test_classifier_parity
 import ast
 import json
 import os
@@ -29,7 +23,7 @@ from backend import classifier
 
 
 def notebook_functions():
-    """Constants and functions of the notebook, without running the whole training."""
+    # notebook functions, without running the training
     tree = ast.parse(NOTEBOOK.read_text(encoding="utf-8"))
     wanted_names = {"CLIP_OHM", "WINDOW_S", "PROFILES", "USE_STEPS"}
     wanted_functions = {"read_cycles", "features"}
@@ -48,9 +42,10 @@ class ParityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.nb = notebook_functions()
         cls.keep_ms = classifier.KEEP_MS
-        classifier.KEEP_MS = 10 ** 12  # the device keeps only recent cycles; here we compare whole files
+        classifier.KEEP_MS = 10 ** 12  # compare whole files
         payload = json.loads(MODEL.read_text(encoding="utf-8"))
         cls.model = classifier.validate_model(payload)
+        cls.reference = payload["clean_air_reference"]
 
     @classmethod
     def tearDownClass(cls):
@@ -61,9 +56,11 @@ class ParityTests(unittest.TestCase):
         if not runs:
             self.skipTest(f"{board}/{label} not found")
         model, nb = self.model, self.nb
-        reference = model["references"][board]["ln_r0"]
+        stored = self.reference[board]["ln_r0"]
+        reference = {(int(key[6]), key.split("_", 1)[1]): [None if v is None else float(v) for v in values]
+                     for key, values in stored.items()}
 
-        # notebook: cycles per (sensor, profile) from its own read_cycles, windows from the first cycle
+        # notebook windows start at the first cycle
         data, cycles, mapping = {}, {}, {}
         for run in runs:
             for csv_path in sorted(run.glob("sensor*.csv")):
@@ -86,7 +83,7 @@ class ParityTests(unittest.TestCase):
         expected = nb["features"]({"data": frames, "ref": ref_np})
         self.assertGreater(len(expected), 3)
 
-        # device: the same windows, (t_end - 120 s, t_end]
+        # same windows on the device
         refs = {sensor: reference[(sensor, profile)] for profile, sensors in mapping.items() for sensor in sensors}
         window_ms = model["window_seconds"] * 1000
         self.assertEqual(model["window_seconds"], nb["WINDOW_S"])

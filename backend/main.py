@@ -19,7 +19,7 @@ import zipfile
 
 try:
     import classifier
-except ImportError:  # imported as backend.main (tests run from the project folder)
+except ImportError:  # tests import backend.main
     from backend import classifier
 
 app = FastAPI()
@@ -28,7 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
 INTERFACE_DIR = PROJECT_DIR / "interface"
 SENSOR_DIR = PROJECT_DIR / "bme-code"
-# BME_SENSOR_BINARY lets a computer without sensors run tools/replay_sensor.py instead
+# local tests replace the sensor program
 SENSOR_BINARY = Path(os.environ.get("BME_SENSOR_BINARY", SENSOR_DIR / "main"))
 SENSOR_COMMAND = str(SENSOR_BINARY) if "BME_SENSOR_BINARY" in os.environ else "./main"
 MEASUREMENTS_DIR = Path(
@@ -38,9 +38,9 @@ MEASUREMENTS_DIR = Path(
 # saved config survives reboot
 CONFIG_PATH = Path(os.environ.get("BME_CONFIG_PATH", "/var/lib/bme688/config.json"))
 LEGACY_CONFIG_PATH = Path("/tmp/bme_config.json")
-# models, the active model and the clean-air reference live next to the config
+# models and clean air live next to the config
 STATE_DIR = Path(os.environ.get("BME_STATE_DIR", CONFIG_PATH.parent))
-# which folder the running measurement writes to (kept in /tmp: a reboot also stops the measurement)
+# folder of the running measurement
 SESSION_PATH = Path(os.environ.get("BME_SESSION_PATH", "/tmp/bme_session.json"))
 
 app.add_middleware(
@@ -81,10 +81,6 @@ class DeleteFilesRequest(BaseModel):
 
 class ActiveModelRequest(BaseModel):
     id: Optional[str] = None
-
-
-class DeviceRequest(BaseModel):
-    board_name: Optional[str] = None
 
 
 class CalibrationRequest(BaseModel):
@@ -317,10 +313,10 @@ def selected_measurement_files(paths: list[str]) -> list[Path]:
 
 @app.post("/api/sync-time")
 def sync_time(data: TimeSync):
-    # moving the clock during a measurement would break the time stamps the classifier relies on
+    # a clock change would break the measurement time stamps
     if sensor_is_running():
         return {"status": "skipped", "message": "Clock not changed during a measurement"}
-    if os.environ.get("BME_SKIP_CLOCK_SYNC") == "1":  # local testing: never touch the computer's clock
+    if os.environ.get("BME_SKIP_CLOCK_SYNC") == "1":  # local tests keep the computer clock
         return {"status": "skipped", "message": "Clock sync disabled"}
     timestamp_sec = data.timestamp_ms / 1000.0
     try:
@@ -576,7 +572,7 @@ def get_logs():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# ---------- classifier ----------
+# classifier
 
 def read_config_or_none():
     try:
@@ -656,21 +652,6 @@ def delete_model(model_id: str):
     if not predictor.store.remove(model_id):
         return api_error("Model not found.", 404)
     return {"status": "success", "active_id": predictor.store.active_id()}
-
-
-@app.get("/api/device")
-def get_device():
-    board, source = predictor.board_name()
-    return {"status": "success", "board_name": board, "source": source}
-
-
-@app.post("/api/device")
-def save_device(request: DeviceRequest):
-    try:
-        predictor.set_board_name(request.board_name or None)
-    except ValueError as error:
-        return api_error(str(error))
-    return get_device()
 
 
 @app.get("/api/prediction")

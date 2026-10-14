@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let actionBusy = false;
     let actionMessage = null;
     // demo clean air
-    let demoReference = { source: 'model', label: 'Stored in the model (bme1)', recorded_at: '2026-09-22T17:11:58' };
+    let demoReference = { source: 'device', recorded_at: new Date(Date.now() - 20 * 60000).toISOString(), age_s: 1200, warnings: [] };
     let demoRecordingUntil = null;
 
     document.getElementById('prediction-demo-controls').hidden = !preview.showControls;
@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
         collecting: ['Collecting data', 'Building a complete pattern across sensors and heater steps.'],
         analysing: ['Analysing', 'Comparing the latest pattern with the model.'],
         calibrating: ['Recording clean air', 'Keep smells away from the sensors until the recording ends.'],
-        no_reference: ['Record clean air first', 'The model compares each smell with clean air from this board.'],
+        no_reference: ['Record clean air first', 'The model compares each smell with clean air from these sensors.'],
         incompatible: ['Profile mismatch', 'The selected model needs different heater profiles.', 'Review model', 'classifier.html'],
         checking: ['Checking profiles', 'Reading the sensor configuration before making predictions.'],
         loading: ['Loading models', 'Reading the models stored on this device.'],
@@ -80,7 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${page}${preview.isDemo ? `?demo=1${preview.showControls ? '&controls=1' : ''}` : ''}`;
     }
 
-    // options: progress (0-100), note, actions (html), message
+    // options: progress, note, actions
     function renderState(state, model, message, options = {}) {
         if (state === 'incompatible') return renderMismatch(model, preview.compatibility(model));
         const [title, description, action, href] = states[state] || states.error;
@@ -125,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updated.textContent = 'Predictions unavailable';
     }
 
-    // a real prediction from the device (or the demo)
+    // prediction from the device or the demo
     function renderResult(prediction, model) {
         const kind = prediction.state;
         const confident = kind === 'ready';
@@ -202,13 +202,9 @@ document.addEventListener('DOMContentLoaded', () => {
         let state = 'none';
         if (reference?.source === 'device') {
             state = 'device';
-            title = `Recorded on this board · ${day(reference.recorded_at)} ${clock(reference.recorded_at)}`;
+            title = `Recorded ${day(reference.recorded_at)} ${clock(reference.recorded_at)}`;
             note = reference.warnings?.length ? reference.warnings[0]
-                : `${reference.age_s < 60 ? 'Just now' : `${duration(reference.age_s)} ago`}. Record again after moving the board or changing rooms.`;
-        } else if (reference?.source === 'model') {
-            state = 'model';
-            title = `Stored in the model (${reference.board || 'training board'}${reference.recorded_at ? `, ${day(reference.recorded_at)}` : ''})`;
-            note = 'Older clean air from training. Recording it on this board gives better results.';
+                : `${reference.age_s < 60 ? 'Just now' : `${duration(reference.age_s)} ago`}. Record again after moving the device or changing rooms.`;
         } else if (reference?.hint) {
             note = reference.hint;
         }
@@ -353,7 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // ---------- clean air ----------
+    // clean air
     function openAirDialog() {
         if (!measuring || actionBusy) return;
         airError.textContent = '';
@@ -424,7 +420,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // ---------- device polling ----------
+    // device polling
     async function poll() {
         if (preview.isDemo) return;
         try {
@@ -469,7 +465,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
             case 'warming': {
                 const total = s.measurement?.warmup_s || model.warmup_seconds || 900;
-                renderState('warming', model, null, {
+                renderState('warming', model, s.message, {
                     progress: (1 - remaining / total) * 100,
                     note: `${duration(remaining)} left of ${duration(total)}`,
                     actions: `<button id="prediction-skip-warmup" class="classifier-text-link prediction-link-button" type="button">Predict now, without waiting</button>`
@@ -489,7 +485,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderState('no_reference', model, s.message, {
                     actions: `<div class="prediction-mismatch-actions">
                         <button id="prediction-record-first" class="btn btn-primary" type="button" ${actionBusy ? 'disabled' : ''}>Record clean air</button>
-                        <a class="classifier-text-link" href="${pageLink('classifier.html')}">Set which board this is</a>
                     </div>`
                 });
                 break;
@@ -518,6 +513,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const preferred = labels.find(label => label.toLowerCase() === 'food') || labels[0];
         const ranked = [preferred, ...labels.filter(label => label !== preferred)];
         const scores = unknown ? [38, 29, 20, 13] : [86, 8, 4, 2];
+        // keep demo probabilities consistent when a model has fewer classes
         if (ranked.length === 1) scores[0] = unknown ? 38 : 100;
         else scores[ranked.length - 1] += scores.slice(ranked.length).reduce((sum, value) => sum + value, 0);
         return {

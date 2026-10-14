@@ -7,8 +7,7 @@ and starts the clean-air recording. Predictions continue when no phone is connec
 |---|---|
 | Models | `/var/lib/bme688/models/` |
 | Selected model | `/var/lib/bme688/active_model.json` |
-| Clean air recorded on this board | `/var/lib/bme688/calibration.json` |
-| Which board this is (`bme1` … `bme4`) | `/var/lib/bme688/device.json` |
+| Clean air recorded on the device | `/var/lib/bme688/calibration.json` |
 | Predictions | `predictions.csv` next to the sensor files of each recording |
 
 The code is in `backend/classifier.py`. It uses plain Python only, so nothing extra has to be installed on the Pi.
@@ -19,8 +18,8 @@ Export it with the notebook (`clasificator/smell_classifier.ipynb`, section 7). 
 
 - `metadata`: name, version, classes, timings and `profile_requirements` (below);
 - `model`: the feature names, the scaling values, the weights (`coef`, `intercept`) and `unknown_below`;
-- `clean_air_reference` (optional): the clean air of each training board, used when no clean air was recorded
-  on the board.
+- `clean_air_reference` (optional): the clean air of each training board. The notebook and the parity test use it;
+  the Pi ignores it and always uses clean air recorded on the device.
 
 Only multinomial logistic regression on curve-shape features (`<profile>_shape_s<step>`) is supported.
 The upload is refused, with the reason, when the file is not valid JSON, a section is missing, the numbers don't match
@@ -55,14 +54,11 @@ The check compares temperatures, ticks, mode, duty and sleep. Profile names are 
 free: the sensors are matched by settings, in ascending sensor order, by both the interface and the Pi. On a mismatch,
 the panel offers **Use model profiles**, which shows the changes and asks for confirmation before saving the configuration.
 
-## Clean-air reference (lenient for now)
+## Clean-air reference
 
-Every prediction compares the smell with clean air from the same board. The Pi uses, in this order:
-
-1. clean air **recorded on this board** (Record clean air: 5 minutes, during a measurement);
-2. otherwise, the clean air **stored in the model** for this board, if **This board** is set on the Classifier
-   page (shown with a warning, because it is older);
-3. otherwise, no predictions: the panel asks you to record clean air.
+Every prediction compares the smell with clean air recorded on the same device (**Record clean air**: 5 minutes,
+during a measurement). It doesn't depend on which board it is. The recording is kept when the measurement stops and
+is replaced by the next one. Without it there are no predictions, and the panel asks you to record clean air.
 
 A recording is saved even when something looks wrong, but with a note:
 - it was made during warm-up;

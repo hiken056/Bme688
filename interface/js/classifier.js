@@ -14,9 +14,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let uploading = false;
     let busy = false;
     let removeId = null;
-    const boardSelect = document.getElementById('classifier-board');
-    const boardNote = document.getElementById('classifier-board-note');
-    let boardState = { board_name: null, source: null };
     let offlineNotice = false;
 
     function notify(message, error = false) {
@@ -66,7 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="model-symbol" aria-hidden="true"></span>
                 <span class="classifier-model-copy">
                     <strong>${preview.escapeHtml(model.name)}</strong>
-                    <span>v${preview.escapeHtml(model.version)} · ${model.classes.length} classes${model.accuracy?.unseen_board ? ` · ${Math.round(model.accuracy.unseen_board * 100)}% tested` : ''} · ${preview.formatSize(model.size_bytes)}</span>
+                    <span>v${preview.escapeHtml(model.version)} · ${model.classes.length} classes${model.accuracy?.unseen_board ? ` · ${Math.round(model.accuracy.unseen_board * 100)}% accuracy` : ''} · ${preview.formatSize(model.size_bytes)}</span>
                 </span>
                 <span class="model-status ${model.id === state.activeId ? 'selected-status' : ''}">${model.id === state.activeId ? 'Selected' : 'Select'}</span>`;
             button.addEventListener('click', () => {
@@ -90,70 +87,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 ['Prediction interval', minutes(model.prediction_interval_seconds)]
             ];
             if (model.accuracy?.unseen_board) {
-                facts.push(['Tested on a new board', `${Math.round(model.accuracy.unseen_board * 100)}% correct`]);
+                facts.push(['Accuracy', `${Math.round(model.accuracy.unseen_board * 100)}%`]);
             }
             document.getElementById('classifier-facts').innerHTML = facts.map(([label, value]) =>
                 `<div><dt>${label}</dt><dd>${preview.escapeHtml(value)}</dd></div>`).join('');
-            const references = model.references || [];
             document.getElementById('classifier-file-facts').innerHTML = [
                 ['Version', `v${model.version}`],
                 ['File size', preview.formatSize(model.size_bytes)],
                 ...(model.uploaded_at ? [['Added', shortDate(model.uploaded_at)]] : []),
-                ...(model.filename ? [['File', model.filename]] : []),
-                ...(!model.demo ? [['Clean air stored for', references.length
-                    ? references.map(ref => `${ref.board}${ref.recorded_at ? ` (${shortDate(ref.recorded_at)})` : ''}`).join(', ')
-                    : 'No boards']] : [])
+                ...(model.filename ? [['File', model.filename]] : [])
             ].map(([label, value]) => `<div><dt>${label}</dt><dd>${preview.escapeHtml(value)}</dd></div>`).join('');
             renderTags('classifier-classes', model.class_labels || model.classes.map(preview.classLabel));
             document.getElementById('classifier-profiles').innerHTML = preview.profileGroups(model).map(group =>
                 `<span>${group.sensors.length ? `${group.sensors.length} × ` : ''}${preview.escapeHtml(group.name)}</span>`).join('');
         }
-        renderBoard();
         updateControls();
     }
-
-    function renderBoard() {
-        if (!boardSelect) return;
-        const boards = new Set(['bme1', 'bme2', 'bme3', 'bme4']);
-        preview.read().models.forEach(model => (model.references || []).forEach(ref => boards.add(ref.board)));
-        if (boardState.board_name) boards.add(boardState.board_name);
-        const current = boardState.board_name || '';
-        boardSelect.innerHTML = `<option value="">Not set</option>` + [...boards].sort().map(board =>
-            `<option value="${preview.escapeHtml(board)}">${preview.escapeHtml(board)}</option>`).join('');
-        boardSelect.value = current;
-        const active = preview.activeModel();
-        const stored = (active?.references || []).some(ref => ref.board === current);
-        boardNote.textContent = !current
-            ? 'Set this so the model can use its stored clean air until you record clean air on this board.'
-            : active && !active.demo && !stored
-                ? `The selected model has no clean air stored for ${current}. Record clean air on this board before predicting.`
-                : boardState.source === 'hostname'
-                    ? `Detected from the device name. Used only when no clean air was recorded on this board.`
-                    : 'Used only when no clean air was recorded on this board.';
-    }
-
-    async function loadBoard() {
-        try {
-            boardState = await preview.boardName();
-        } catch (error) {
-            boardState = { board_name: null, source: null };
-        }
-        renderBoard();
-    }
-
-    boardSelect?.addEventListener('change', async () => {
-        if (measurementRunning) return;
-        boardSelect.disabled = true;
-        try {
-            boardState = await preview.saveBoardName(boardSelect.value || null);
-            notify(boardState.board_name ? `This board is set to ${boardState.board_name}.` : 'Board cleared.');
-        } catch (error) {
-            notify(error.message, true);
-        } finally {
-            boardSelect.disabled = false;
-            renderBoard();
-        }
-    });
 
     function renderTags(id, values) {
         document.getElementById(id).innerHTML = values.map(value =>
@@ -169,7 +118,6 @@ document.addEventListener('DOMContentLoaded', () => {
             button.disabled = measurementRunning || busy;
         });
         remove.disabled = measurementRunning || busy || !selectedId;
-        if (boardSelect) boardSelect.disabled = measurementRunning || busy;
     }
 
     function parseMetadata(payload, file) {
@@ -367,7 +315,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('classifier-preview-change', render);
     window.addEventListener('focus', () => preview.refreshModels());
     render();
-    loadBoard();
     checkMeasurement();
     if (!preview.isDemo) {
         setInterval(checkMeasurement, 2500);

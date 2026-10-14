@@ -1,4 +1,4 @@
-// models live on the device (demo mode keeps them in this browser)
+// models live on the device; the demo keeps them in the browser
 window.ClassifierPreview = (() => {
     const storageKey = 'bmeClassifierPreviewV1';
     const sessionKey = 'bmeAcquisitionPreviewV1';
@@ -68,7 +68,7 @@ window.ClassifierPreview = (() => {
         });
     });
 
-    // device models: loaded from /api/models and kept here
+    // models read from the device
     let deviceModels = { status: 'loading', models: [], activeId: null, message: '' };
     let modelsRequest = null;
 
@@ -86,7 +86,7 @@ window.ClassifierPreview = (() => {
         window.dispatchEvent(new Event('classifier-preview-change'));
     }
 
-    // fetch with a timeout; device errors come back as { status: 'error', message }
+    // device errors return status and message
     async function api(url, options = {}, timeoutMs = 8000) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -130,7 +130,7 @@ window.ClassifierPreview = (() => {
         return isDemo ? { status: 'ready', message: '' } : { status: deviceModels.status, message: deviceModels.message };
     }
 
-    // add, select and remove go to the device; the demo keeps using browser storage
+    // the demo keeps using browser storage
     async function addModel(text, file, parsed) {
         if (isDemo) {
             const state = read();
@@ -169,20 +169,6 @@ window.ClassifierPreview = (() => {
         }
         await api(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' });
         await refreshModels();
-    }
-
-    // which board this is: picks the model's stored clean air when none was recorded here
-    let demoBoard = 'bme1';
-    async function boardName() {
-        if (isDemo) return { board_name: demoBoard, source: 'saved' };
-        return api('/api/device');
-    }
-
-    async function saveBoardName(name) {
-        if (isDemo) { demoBoard = name; return { board_name: name, source: 'saved' }; }
-        return api('/api/device', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ board_name: name || null })
-        });
     }
 
     function classLabel(name) {
@@ -458,6 +444,6 @@ window.ClassifierPreview = (() => {
         isDemo, showControls, read, save, activeModel, readSession, saveSession, escapeHtml, formatSize,
         refreshConfiguration, saveDemoConfiguration, configuration: () => configState,
         validRequirements, expandRequirements, compatibility, profileGroups, configurationForModel,
-        api, refreshModels, modelsStatus, addModel, selectModel, removeModel, boardName, saveBoardName, classLabel
+        api, refreshModels, modelsStatus, addModel, selectModel, removeModel, classLabel
     };
 })();

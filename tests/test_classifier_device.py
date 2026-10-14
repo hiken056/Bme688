@@ -1,4 +1,4 @@
-"""Device classifier: model checks, storage, clean air and the prediction states (synthetic data)."""
+# device classifier with synthetic data
 import copy
 import json
 import math
@@ -15,7 +15,7 @@ PROFILES = {
     "hp_354_standard": ([320, 100, 100, 100, 200, 200, 200, 320, 320, 320], [5, 2, 10, 30, 5, 5, 5, 5, 5, 5]),
 }
 STEPS = {"hp_301_basic": [2, 3, 4, 5], "hp_354_standard": [0, 4, 5, 6]}
-CLEAN = 14.0       # ln R of clean air at every step
+CLEAN = 14.0       # ln R of clean air
 T0 = 1_790_000_000_000
 
 
@@ -35,7 +35,7 @@ def make_payload():
             "type": "multinomial_logistic_regression", "features": features,
             "use_steps": STEPS, "impute_median": [0.0] * n, "scaler_mean": [0.0] * n, "scaler_scale": [0.1] * n,
             "classes": ["clean_air", "smell"],
-            # binary model: one row; a bent curve (first step higher than the rest) means "smell"
+            # a higher first step means smell
             "coef": [[2.0 if i % 4 == 0 else -0.6 for i in range(n)]], "intercept": [-1.0], "unknown_below": 0.6,
         },
         "clean_air_reference": {"bme7": {"recorded_at": "2026-09-22T10:00:00", "ln_r0": {
@@ -76,8 +76,7 @@ class DeviceTestCase(unittest.TestCase):
         self.temp.cleanup()
 
     def write(self, minutes, shift=0.0, drift=0.0):
-        """Append `minutes` of cycles to every sensor; `shift` lowers ln R at the first used step (a smell),
-        `drift` lowers it at every step (sensors still changing)."""
+        # shift is a smell, drift is a sensor still changing
         end = self.t + minutes * 60000
         while self.t < end:
             for sensor, profile in [(1, "hp_301_basic"), (2, "hp_301_basic"), (3, "hp_354_standard"), (4, "hp_354_standard")]:
@@ -95,6 +94,14 @@ class DeviceTestCase(unittest.TestCase):
     def tick(self):
         self.predictor.tick(now_ms=self.t)
         return self.predictor.snapshot()
+
+    def save_clean_air(self):
+        # same file as Record clean air
+        setup = classifier.sensor_setup(self.config)
+        classifier.write_json_atomic(self.state / "calibration.json", {
+            "recorded_at": "2026-09-22T10:00:00", "recorded_ms": self.t, "warnings": [],
+            "sensors": {str(s): {"profile": setup[s]["name"], "signature": setup[s]["signature"], "ln_r0": [CLEAN] * 10}
+                        for s in setup}})
 
 
 class ModelChecks(unittest.TestCase):
@@ -157,7 +164,7 @@ class PredictionStates(DeviceTestCase):
         self.write(9)
         self.assertEqual(self.tick()["state"], "no_reference")
 
-        # clean air recorded on the board
+        # record clean air
         self.predictor.start_recording(300)
         self.assertEqual(self.tick()["state"], "calibrating")
         self.write(5.5)
@@ -178,18 +185,14 @@ class PredictionStates(DeviceTestCase):
         self.assertTrue(log[0].startswith("Timestamp_ms,Time,Model"))
         self.assertIn(",smell,", log[-1])
 
-    def test_model_reference_is_used_when_the_board_is_known(self):
+    def test_stored_training_clean_air_is_never_used(self):
         self.write(13)
-        self.assertEqual(self.tick()["state"], "no_reference")
-        self.predictor.set_board_name("bme7")
         status = self.tick()
-        self.assertEqual(status["reference"]["source"], "model")
-        self.assertEqual(status["result"]["label"], "clean_air")
-        reference_check = [c for c in status["checks"] if c["id"] == "reference"][0]
-        self.assertTrue(reference_check["ok"] and reference_check["warn"])
+        self.assertEqual(status["state"], "no_reference")
+        self.assertIsNone(status["result"])
 
     def test_warmup_can_be_skipped(self):
-        self.predictor.set_board_name("bme7")
+        self.save_clean_air()
         self.write(3)
         self.assertEqual(self.tick()["state"], "warming")
         self.predictor.skip_warmup()
@@ -205,7 +208,7 @@ class PredictionStates(DeviceTestCase):
         self.assertIn("hp_301_basic", status["issues"][0])
 
     def test_unusual_pattern_is_not_classified(self):
-        self.predictor.set_board_name("bme7")
+        self.save_clean_air()
         self.write(11)
         self.write(2.5, shift=3.0)
         status = self.tick()
@@ -213,7 +216,7 @@ class PredictionStates(DeviceTestCase):
         self.assertIsNone(status["result"]["label"])
 
     def test_stale_data_is_reported(self):
-        self.predictor.set_board_name("bme7")
+        self.save_clean_air()
         self.write(12)
         self.predictor.tick(now_ms=self.t + 10 * 60000)
         self.assertEqual(self.predictor.snapshot()["state"], "no_data")
