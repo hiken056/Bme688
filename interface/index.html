@@ -91,12 +91,9 @@
                         <label for="prediction-demo-state">State</label>
                         <select id="prediction-demo-state">
                             <option value="ready">Prediction ready</option>
-                            <option value="warming">Warming up</option>
                             <option value="collecting">Collecting data</option>
                             <option value="analysing">Analysing</option>
                             <option value="unknown">Unknown smell</option>
-                            <option value="calibrating">Recording clean air</option>
-                            <option value="no_reference">No clean air yet</option>
                             <option value="incompatible">Profile mismatch</option>
                             <option value="error">Classifier unavailable</option>
                             <option value="idle">Measurement stopped</option>
@@ -143,24 +140,6 @@
             <div class="session-actions">
                 <button id="profile-match-cancel" class="btn btn-outline" type="button">Cancel</button>
                 <button id="profile-match-apply" class="btn btn-primary" type="submit">Apply profiles</button>
-            </div>
-        </form>
-    </dialog>
-
-    <dialog id="air-dialog" class="session-dialog air-dialog" aria-labelledby="air-dialog-title">
-        <form id="air-form" class="session-form">
-            <h3 id="air-dialog-title">Record clean air</h3>
-            <p>The model compares every smell with clean air from these sensors. Recording takes 5 minutes and is kept until you record again.</p>
-            <ol class="air-steps">
-                <li>Remove any samples and keep smells away from the sensors.</li>
-                <li>Keep the device where it is and avoid breathing on it.</li>
-                <li>Predictions pause until the recording ends.</li>
-            </ol>
-            <p id="air-warmup-warning" class="air-warning" hidden></p>
-            <p id="air-error" class="session-error" role="alert"></p>
-            <div class="session-actions">
-                <button id="air-cancel" class="btn btn-outline" type="button">Cancel</button>
-                <button id="air-start" class="btn btn-primary" type="submit">Start recording</button>
             </div>
         </form>
     </dialog>

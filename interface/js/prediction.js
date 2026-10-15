@@ -13,11 +13,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const matchError = document.getElementById('profile-match-error');
     const matchApply = document.getElementById('profile-match-apply');
     const matchCancel = document.getElementById('profile-match-cancel');
-    const airDialog = document.getElementById('air-dialog');
-    const airForm = document.getElementById('air-form');
-    const airError = document.getElementById('air-error');
-    const airStart = document.getElementById('air-start');
-    const airWarning = document.getElementById('air-warmup-warning');
     let measuring = false;
     let demoState = 'idle';
     let demoStartedAt = null;
@@ -28,11 +23,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let live = null;
     let liveError = '';
     let liveTimer = null;
-    let actionBusy = false;
-    let actionMessage = null;
-    // demo clean air
-    let demoReference = { source: 'device', recorded_at: new Date(Date.now() - 20 * 60000).toISOString(), age_s: 1200, warnings: [] };
-    let demoRecordingUntil = null;
+    const demoReference = { source: 'training', board: 'bme1', averaged: false, recorded_at: '2026-09-22T17:11:58',
+        label: 'Training clean air of bme1' };
 
     document.getElementById('prediction-demo-controls').hidden = !preview.showControls;
 
@@ -41,11 +33,9 @@ document.addEventListener('DOMContentLoaded', () => {
         inactive: ['Classifier inactive', 'Select a model on the Classifier page.', 'Select a model', 'classifier.html'],
         idle: ['Ready when you are', 'Start a measurement to collect a smell pattern.'],
         starting: ['Starting sensors', 'Waiting for the first sensor readings.'],
-        warming: ['Warming up', 'Waiting for the sensors to settle before analysing.'],
         collecting: ['Collecting data', 'Building a complete pattern across sensors and heater steps.'],
         analysing: ['Analysing', 'Comparing the latest pattern with the model.'],
-        calibrating: ['Recording clean air', 'Keep smells away from the sensors until the recording ends.'],
-        no_reference: ['Record clean air first', 'The model compares each smell with clean air from these sensors.'],
+        no_reference: ['No clean-air reference', 'The model has no training clean air for these heater profiles.'],
         incompatible: ['Profile mismatch', 'The selected model needs different heater profiles.', 'Review model', 'classifier.html'],
         checking: ['Checking profiles', 'Reading the sensor configuration before making predictions.'],
         loading: ['Loading models', 'Reading the models stored on this device.'],
@@ -55,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
         error: ['Classifier unavailable', 'Predictions are unavailable. Measurement recording continues.'],
         disconnected: ['Device not reachable', 'Predictions will appear when the device responds again. Recording continues on the device.']
     };
-    const busyStates = ['starting', 'warming', 'collecting', 'analysing', 'calibrating', 'loading'];
+    const busyStates = ['starting', 'collecting', 'analysing', 'loading'];
 
     function duration(seconds) {
         seconds = Math.max(0, Math.round(seconds || 0));
@@ -85,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state === 'incompatible') return renderMismatch(model, preview.compatibility(model));
         const [title, description, action, href] = states[state] || states.error;
         const busy = busyStates.includes(state);
-        const progress = options.progress ?? (state === 'warming' ? 43 : 68);
+        const progress = options.progress ?? 68;
         result.dataset.state = state;
         result.innerHTML = `
             <div class="prediction-placeholder">
@@ -96,7 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <p>${preview.escapeHtml(message || description)}</p>
                 ${busy && state !== 'loading' && state !== 'starting' ? `<div class="prediction-progress" aria-hidden="true"><span style="width:${Math.min(100, Math.max(3, progress))}%"></span></div>
                     <span class="prediction-progress-note">${preview.escapeHtml(options.note ||
-                        (state === 'warming' ? `${duration(model?.warmup_seconds || 900)} warm-up` : `${model?.window_seconds || 120} s analysis window`))}</span>` : ''}
+                        `${model?.window_seconds || 120} s analysis window`)}</span>` : ''}
                 ${options.actions || ''}
                 ${action ? `<a class="btn btn-outline" href="${pageLink(href)}">${action}</a>` : ''}
             </div>`;
@@ -189,45 +179,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // clean-air strip under the result
-    function renderReference(reference, calibration) {
-        const model = preview.activeModel();
-        if (!model) {
+    function renderReference(reference) {
+        if (!preview.activeModel() || !reference) {
             referenceBox.hidden = true;
             return;
         }
         referenceBox.hidden = false;
-        const recording = calibration?.recording;
-        let title = 'None yet';
-        let note = 'Record clean air before predicting.';
-        let state = 'none';
-        if (reference?.source === 'device') {
-            state = 'device';
-            title = `Recorded ${day(reference.recorded_at)} ${clock(reference.recorded_at)}`;
-            note = reference.warnings?.length ? reference.warnings[0]
-                : `${reference.age_s < 60 ? 'Just now' : `${duration(reference.age_s)} ago`}. Record again after moving the device or changing rooms.`;
-        } else if (reference?.hint) {
-            note = reference.hint;
-        }
-        if (recording) {
-            state = 'recording';
-            title = `Recording clean air · ${duration(calibration.remaining_s)} left`;
-            note = 'Keep smells away from the sensors.';
-        }
-        const last = calibration?.last;
-        const message = actionMessage || (last && !recording ? { text: last.message, error: !last.ok } : null);
-        const canRecord = measuring && !actionBusy;
-        referenceBox.dataset.state = state;
+        referenceBox.dataset.state = reference.averaged ? 'model' : 'device';
+        const note = reference.averaged
+            ? `This device's board was not found in the model (${(reference.boards || []).join(', ')}), so the average is used.`
+            : `Recorded during training${reference.recorded_at ? `, ${day(reference.recorded_at)}` : ''}. Read from the device name.`;
         referenceBox.innerHTML = `
             <div class="prediction-reference-copy">
                 <span class="classifier-label">Clean-air reference</span>
-                <strong>${preview.escapeHtml(title)}</strong>
+                <strong>${preview.escapeHtml(reference.label)}</strong>
                 <span class="prediction-reference-note">${preview.escapeHtml(note)}</span>
-                ${message ? `<span class="prediction-reference-message ${message.error ? 'is-error' : ''}" role="status">${preview.escapeHtml(message.text)}</span>` : ''}
-            </div>
-            ${recording
-                ? `<button id="prediction-air-cancel" class="prediction-manage-button" type="button" ${actionBusy ? 'disabled' : ''}>Cancel</button>`
-                : `<button id="prediction-air-record" class="prediction-manage-button" type="button" ${canRecord ? '' : 'disabled'}
-                    title="${measuring ? 'Record 5 minutes of clean air' : 'Start a measurement first: the sensors only run while measuring'}">Record clean air</button>`}`;
+            </div>`;
     }
 
     async function request(url, options = {}) {
@@ -293,13 +260,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     result.addEventListener('click', event => {
         if (event.target.closest('#prediction-match-profiles')) openMatchDialog();
-        if (event.target.closest('#prediction-record-first')) openAirDialog();
-        if (event.target.closest('#prediction-air-cancel-main')) cancelRecording();
-        if (event.target.closest('#prediction-skip-warmup')) skipWarmup();
-    });
-    referenceBox.addEventListener('click', event => {
-        if (event.target.closest('#prediction-air-record')) openAirDialog();
-        if (event.target.closest('#prediction-air-cancel')) cancelRecording();
     });
     window.addEventListener('classifier-match-request', openMatchDialog);
     matchCancel.addEventListener('click', () => { if (!matchingProfiles) matchDialog.close(); });
@@ -349,77 +309,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // clean air
-    function openAirDialog() {
-        if (!measuring || actionBusy) return;
-        airError.textContent = '';
-        airStart.disabled = false;
-        const remaining = preview.isDemo ? 0 : live?.measurement?.warmup_remaining_s || 0;
-        airWarning.hidden = remaining <= 0;
-        airWarning.textContent = remaining > 0
-            ? `The sensors are still warming up (${duration(remaining)} left). Clean air recorded now may not match the warmed-up sensors. For the best reference, wait until warm-up ends.`
-            : '';
-        airDialog.showModal();
-        airStart.focus();
-    }
-
-    document.getElementById('air-cancel').addEventListener('click', () => airDialog.close());
-    airForm.addEventListener('submit', async event => {
-        event.preventDefault();
-        airStart.disabled = true;
-        airError.textContent = '';
-        try {
-            if (preview.isDemo) {
-                demoRecordingUntil = Date.now() + 6000;
-            } else {
-                await preview.api('/api/calibration/start', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ duration_seconds: 300 })
-                });
-                actionMessage = null;
-                await poll();
-            }
-            airDialog.close();
-        } catch (error) {
-            airError.textContent = error.message;
-        } finally {
-            airStart.disabled = false;
-            render();
-        }
-    });
-
-    async function cancelRecording() {
-        if (actionBusy) return;
-        actionBusy = true;
-        render();
-        try {
-            if (preview.isDemo) demoRecordingUntil = null;
-            else {
-                await preview.api('/api/calibration/cancel', { method: 'POST' });
-                actionMessage = { text: 'Clean-air recording cancelled. The previous reference is kept.' };
-                await poll();
-            }
-        } catch (error) {
-            actionMessage = { text: error.message, error: true };
-        } finally {
-            actionBusy = false;
-            render();
-        }
-    }
-
-    async function skipWarmup() {
-        if (actionBusy) return;
-        actionBusy = true;
-        try {
-            await preview.api('/api/prediction/skip-warmup', { method: 'POST' });
-            await poll();
-        } catch (error) {
-            actionMessage = { text: error.message, error: true };
-        } finally {
-            actionBusy = false;
-            render();
-        }
-    }
-
     // device polling
     async function poll() {
         if (preview.isDemo) return;
@@ -449,7 +338,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         const s = live;
-        const remaining = s.measurement?.warmup_remaining_s;
         switch (s.state) {
             case 'no_model':
                 renderState('inactive', model);
@@ -463,30 +351,8 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'starting':
                 renderState('starting', model);
                 break;
-            case 'warming': {
-                const total = s.measurement?.warmup_s || model.warmup_seconds || 900;
-                renderState('warming', model, s.message, {
-                    progress: (1 - remaining / total) * 100,
-                    note: `${duration(remaining)} left of ${duration(total)}`,
-                    actions: `<button id="prediction-skip-warmup" class="classifier-text-link prediction-link-button" type="button">Predict now, without waiting</button>`
-                });
-                break;
-            }
-            case 'calibrating': {
-                const cal = s.calibration || {};
-                renderState('calibrating', model, null, {
-                    progress: cal.duration_s ? (1 - cal.remaining_s / cal.duration_s) * 100 : 5,
-                    note: cal.recording ? `${duration(cal.remaining_s)} left` : 'Saving…',
-                    actions: `<button id="prediction-air-cancel-main" class="classifier-text-link prediction-link-button" type="button">Cancel recording</button>`
-                });
-                break;
-            }
             case 'no_reference':
-                renderState('no_reference', model, s.message, {
-                    actions: `<div class="prediction-mismatch-actions">
-                        <button id="prediction-record-first" class="btn btn-primary" type="button" ${actionBusy ? 'disabled' : ''}>Record clean air</button>
-                    </div>`
-                });
+                renderState('no_reference', model, s.message);
                 break;
             case 'collecting': {
                 const total = model.window_seconds || 120;
@@ -529,16 +395,10 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('prediction-model-name').textContent = model ? `${model.name} · v${model.version}` : 'No model selected';
         windowLabel.textContent = model ? `${model.window_seconds} s window · every ${model.prediction_interval_seconds} s` : '';
         if (!preview.isDemo) {
-            renderReference(live?.reference, live?.calibration);
+            renderReference(live?.reference);
             renderChecks(model && live?.model?.id === model.id ? live.checks : null);
         } else {
-            const recording = demoRecordingUntil && Date.now() < demoRecordingUntil;
-            if (demoRecordingUntil && !recording) {
-                demoRecordingUntil = null;
-                demoReference = { source: 'device', recorded_at: new Date().toISOString(), warnings: [] };
-            }
-            renderReference(demoState === 'no_reference' ? { source: 'none' } : demoReference,
-                { recording, remaining_s: recording ? Math.ceil((demoRecordingUntil - Date.now()) / 1000) * 50 : 0 });
+            renderReference(demoReference);
             checksBox.hidden = true;
         }
         if (!model) {
@@ -552,14 +412,8 @@ document.addEventListener('DOMContentLoaded', () => {
             renderState('idle', model);
         } else if (!preview.isDemo) {
             renderLive(model);
-        } else if (demoRecordingUntil) {
-            renderState('calibrating', model, null, { progress: 100 - (demoRecordingUntil - Date.now()) / 60, note: 'Demo recording' });
         } else if (demoState === 'ready' || demoState === 'unknown') {
             renderResult(demoPrediction(model, demoState === 'unknown'), model);
-        } else if (demoState === 'no_reference') {
-            renderState('no_reference', model, null, {
-                actions: `<div class="prediction-mismatch-actions"><button id="prediction-record-first" class="btn btn-primary" type="button">Record clean air</button></div>`
-            });
         } else {
             renderState(demoState, model);
         }
@@ -575,16 +429,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const wasMeasuring = measuring;
         measuring = event.detail.running;
         previewOverride = false;
-        actionMessage = null;
         preview.refreshConfiguration();
         if (preview.isDemo) {
             if (measuring && !wasMeasuring) {
                 demoStartedAt = Date.now();
-                demoState = 'warming';
+                demoState = 'collecting';
             } else if (!measuring) {
                 demoStartedAt = null;
                 demoState = 'idle';
-                demoRecordingUntil = null;
             }
             stateSelect.value = demoState;
         } else {
@@ -595,10 +447,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (preview.isDemo) {
         setInterval(() => {
-            if (demoRecordingUntil) { render(); return; }
             if (!measuring || !demoStartedAt) return;
             const elapsed = Date.now() - demoStartedAt;
-            const nextState = elapsed < 3000 ? 'warming' : elapsed < 6000 ? 'collecting' : 'ready';
+            const nextState = elapsed < 4000 ? 'collecting' : 'ready';
             if (nextState === demoState) return;
             demoState = nextState;
             stateSelect.value = demoState;

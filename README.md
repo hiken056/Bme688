@@ -101,8 +101,9 @@ Models are uploaded on the Classifier page and stored on the Pi. During a measur
 the live prediction, the checks behind it and the clean-air reference:
 
 1. Classifier page: add the model JSON and select it.
-2. Start a measurement and wait for the 15-minute warm-up.
-3. Press **Record clean air** with nothing near the sensors (5 minutes).
-4. Bring the sample. Predictions appear every 30 seconds and are saved to `predictions.csv` in the recording.
+2. Start a measurement. The first prediction comes after 2 minutes, then every 30 seconds.
+3. Predictions are saved to `predictions.csv` in the recording.
+
+The first 15 minutes after the sensors switch on are less reliable: they are still warming up.
 
 Details: [CLASSIFIER_MODELS.md](CLASSIFIER_MODELS.md).

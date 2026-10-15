@@ -3,6 +3,7 @@ import json
 import math
 import os
 import re
+import socket
 import tempfile
 import threading
 import time
@@ -14,6 +15,7 @@ MAX_MODEL_BYTES = 5 * 1024 * 1024
 SUPPORTED_TYPES = {"multinomial_logistic_regression"}
 FEATURE_RE = re.compile(r"^(?P<profile>.+)_shape_s(?P<step>\d)$")
 SENSOR_FILE_RE = re.compile(r"^sensor(\d)_.*\.csv$")
+REFERENCE_KEY_RE = re.compile(r"^sensor([1-8])_(.+)$")
 RUN_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(\d+)min(?:_\d+)?$")
 
 DEFAULT_CLIP_OHM = 1.02e8      # sensor maximum, carries no information
@@ -27,11 +29,6 @@ UNUSUAL_COUNT = 3
 MAX_MISSING_FRACTION = 0.25
 MIN_CYCLE_FRACTION = 0.5
 
-# clean air
-CALIBRATION_SECONDS = 300
-CALIBRATION_MIN_CYCLES = 3
-CALIBRATION_STABLE = 0.15      # clean air after warm-up stays below 0.1
-REFERENCE_FRESH_HOURS = 12
 
 
 class ModelError(ValueError):
@@ -208,6 +205,24 @@ def validate_model(payload) -> dict:
     unknown_below = _number(model.get("unknown_below"), "unknown_below", 0, 1, default=0.6)
     clip = _number(model.get("clip_ohm"), "clip_ohm", 1, 1e12, default=DEFAULT_CLIP_OHM)
 
+    references = {}
+    raw_refs = payload.get("clean_air_reference") or {}
+    if not isinstance(raw_refs, dict):
+        raise ModelError("clean_air_reference must have one entry per board.")
+    for board, entry in raw_refs.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("ln_r0"), dict):
+            raise ModelError(f"clean_air_reference for {board} needs ln_r0 values.")
+        values = {}
+        for key, steps in entry["ln_r0"].items():
+            match = REFERENCE_KEY_RE.match(key)
+            if (not match or not isinstance(steps, list) or len(steps) != 10 or
+                    not all(v is None or finite(v) for v in steps)):
+                raise ModelError(f"clean_air_reference {board}/{key} must hold 10 values.")
+            values[(int(match.group(1)), match.group(2))] = [None if v is None else float(v) for v in steps]
+        references[str(board)] = {"recorded_at": entry.get("recorded_at"), "ln_r0": values}
+    if not references:
+        raise ModelError("The model has no clean_air_reference. Export it again with the notebook.")
+
     training = payload.get("training") if isinstance(payload.get("training"), dict) else {}
     accuracy = {key: training.get(f"balanced_accuracy_{key}") for key in ("unseen_board", "unseen_session")
                 if finite(training.get(f"balanced_accuracy_{key}"))}
@@ -217,7 +232,7 @@ def validate_model(payload) -> dict:
         "window_seconds": window, "warmup_seconds": warmup, "prediction_interval_seconds": interval,
         "requirements": requirements, "features": list(features), "steps_by_profile": steps_by_profile,
         "impute": impute, "mean": mean, "scale": scale, "coef": coef, "intercept": intercept,
-        "unknown_below": unknown_below, "clip_ohm": clip,
+        "unknown_below": unknown_below, "clip_ohm": clip, "references": references,
         "accuracy": accuracy, "sessions": training.get("sessions") if finite(training.get("sessions")) else None,
     }
 
@@ -312,6 +327,7 @@ def summary(model: dict) -> dict:
         "prediction_interval_seconds": model["prediction_interval_seconds"],
         "feature_count": len(model["features"]), "unknown_below": model["unknown_below"],
         "accuracy": model["accuracy"], "sessions": model["sessions"],
+        "references": [{"board": board, "recorded_at": ref.get("recorded_at")} for board, ref in model["references"].items()],
         "size_bytes": model["size_bytes"], "filename": model["filename"], "uploaded_at": model["uploaded_at"],
     }
 
@@ -470,7 +486,7 @@ class LiveData:
                 elif index >= len(runs) - 2:
                     reader.update()
         if self.first_t is None and runs:
-            # measurement start, for the warm-up
+            # measurement start
             firsts = []
             for csv_path in (f for f in runs[0].iterdir() if SENSOR_FILE_RE.match(f.name)):
                 reader = self.readers.get(csv_path)
@@ -550,13 +566,54 @@ def classify(model: dict, values: dict) -> dict:
     return {"probabilities": probabilities, "missing": missing, "unusual": far, "max_z": max(abs(v) for v in x)}
 
 
+# board from the device name: bme688-01 is bme1 (BME_BOARD for local tests)
+def board_name():
+    if os.environ.get("BME_BOARD"):
+        return os.environ["BME_BOARD"]
+    match = re.search(r"bme688-0*(\d+)", socket.gethostname(), re.IGNORECASE)
+    return f"bme{match.group(1)}" if match else None
+
+
+def average(rows):
+    out = []
+    for i in range(10):
+        values = [row[i] for row in rows if row[i] is not None]
+        out.append(sum(values) / len(values) if values else None)
+    return out
+
+
+# clean air from training: the board's own sensors, otherwise the average of the training boards
+def training_reference(model, mapping, board):
+    stored = model["references"]
+    own = stored[board]["ln_r0"] if board in stored else {}
+    every = [(profile, values) for entry in stored.values() for (_, profile), values in entry["ln_r0"].items()]
+    refs, averaged = {}, False
+    for profile, sensors in mapping.items():
+        for sensor in sensors:
+            if (sensor, profile) in own:
+                refs[sensor] = own[(sensor, profile)]
+                continue
+            rows = [values for (_, p), values in own.items() if p == profile] or [v for p, v in every if p == profile]
+            if rows:
+                refs[sensor], averaged = average(rows), True
+    if board in stored and not averaged:
+        label = f"Training clean air of {board}"
+    elif board in stored:
+        label = f"Training clean air of {board}, averaged where sensors were moved"
+    else:
+        label = "Average training clean air" + (f" ({board} is not in the model)" if board else "")
+    complete = all(any(s in refs for s in sensors) for sensors in mapping.values())
+    reference = {"source": "training", "board": board, "boards": sorted(stored), "averaged": averaged or board not in stored,
+                 "recorded_at": stored[board].get("recorded_at") if board in stored else None, "label": label}
+    return (refs if complete else None), reference
+
+
 # live predictor
 
 class Predictor:
     def __init__(self, state_dir: Path, measurements_dir: Path, session_path: Path, is_running, read_config):
         self.state_dir = state_dir
         self.store = ModelStore(state_dir)
-        self.calibration_path = state_dir / "calibration.json"
         self.data = LiveData(measurements_dir, session_path)
         self.session_path = session_path
         self.is_running, self.read_config = is_running, read_config
@@ -564,15 +621,9 @@ class Predictor:
         self.result = None
         self.result_checks = []        # checks of the last prediction
         self.status_cache = None
-        self.recording = None
-        self.last_calibration = None   # outcome of the last recording
-        self.skip_warmup_key = None
         self.last_prediction_t = None
         self.thread = None
         self.stop_event = threading.Event()
-
-    def calibration(self):
-        return read_json(self.calibration_path)
 
     # background loop
     def start(self):
@@ -600,16 +651,11 @@ class Predictor:
         model = self.store.active()
         if not running:
             with self.lock:
-                if self.recording:
-                    self.last_calibration = {"ok": False, "at": time.time(),
-                                             "message": "The measurement stopped before the clean-air recording finished."}
-                self.recording = None
                 self.result, self.last_prediction_t, self.result_checks = None, None, []
                 self.status_cache = self._status(model, running=False)
             return
         self.data.clip = model["clip_ohm"] if model else DEFAULT_CLIP_OHM
         self.data.update()
-        self._finish_recording()
         status = self._status(model, running=True, now_ms=now_ms)
         if status.get("due"):
             self._predict(model, status)
@@ -628,34 +674,7 @@ class Predictor:
             status.pop("due", None)
             status.pop("_ctx", None)
             status["result"] = self.result
-            status["calibration"] = self._calibration_view()
             return status
-
-    # clean-air reference
-    def _resolve_reference(self, model, mapping, setup, now_ms):
-        cal = self.calibration()
-        warnings = []
-        if isinstance(cal, dict) and isinstance(cal.get("sensors"), dict):
-            refs, missing = {}, []
-            for sensors in mapping.values():
-                for sensor in sensors:
-                    entry = cal["sensors"].get(str(sensor))
-                    if entry and entry.get("signature") == setup.get(sensor, {}).get("signature"):
-                        refs[sensor] = entry["ln_r0"]
-                    else:
-                        missing.append(sensor)
-            if all(any(s in refs for s in sensors) for sensors in mapping.values()):
-                age_h = (now_ms - cal.get("recorded_ms", now_ms)) / 3600000
-                if missing:
-                    warnings.append(f"Sensors {', '.join(map(str, missing))} have no clean-air value and are left out.")
-                if age_h > REFERENCE_FRESH_HOURS:
-                    warnings.append(f"Clean air was recorded {age_h:.0f} hours ago. Record it again for better results.")
-                warnings.extend(cal.get("warnings") or [])
-                return refs, {"source": "device", "recorded_at": cal.get("recorded_at"),
-                              "age_s": max(0, round((now_ms - cal.get("recorded_ms", now_ms)) / 1000)),
-                              "label": "Recorded on this device", "warnings": warnings}
-        hint = "Record clean air before predicting: the model compares every smell with clean air from these sensors."
-        return None, {"source": "none", "label": "No clean-air reference", "warnings": [], "hint": hint}
 
     # status and checks
     def _status(self, model, running, now_ms=None):
@@ -676,11 +695,12 @@ class Predictor:
         if issues:
             status.update(state="incompatible", message="The heater profiles don't match the model.", issues=issues)
             return status
-        refs, reference = self._resolve_reference(model, mapping, setup, now_ms)
+        refs, reference = training_reference(model, mapping, board_name())
         status["reference"] = reference
+        reference_check = {"id": "reference", "ok": refs is not None, "warn": reference["averaged"],
+                           "label": "Clean-air reference", "detail": reference["label"]}
         if not running:
-            checks.append({"id": "reference", "ok": refs is not None, "warn": bool(reference.get("warnings")),
-                           "label": "Clean-air reference", "detail": reference.get("hint") or reference["label"]})
+            checks.append(reference_check)
             status.update(state="idle", message="Start a measurement to get predictions.")
             return status
 
@@ -694,36 +714,21 @@ class Predictor:
             status.update(state="starting", message="Waiting for the first sensor readings.")
             return status
         elapsed = (last_t - first_t) / 1000 if first_t else 0
-        warmup = model["warmup_seconds"]
-        skipped = self.skip_warmup_key == self.session_key()
-        warm = elapsed >= warmup
-        status["measurement"] = {"elapsed_s": round(elapsed), "warmup_s": warmup,
-                                 "warmup_remaining_s": max(0, round(warmup - elapsed)), "warmup_skipped": skipped and not warm}
-        checks.append({"id": "warmup", "ok": warm, "warn": skipped and not warm, "label": "Sensors warmed up",
-                       "detail": None if warm else f"{max(0, round((warmup - elapsed) / 60))} min left"
-                       + (" (skipped: predictions may be wrong)" if skipped else "")})
-        checks.append({"id": "reference", "ok": refs is not None, "warn": bool(reference.get("warnings")),
-                       "label": "Clean-air reference", "detail": reference.get("hint") or " ".join(reference["warnings"]) or reference["label"]})
+        status["measurement"] = {"elapsed_s": round(elapsed)}
+        checks.append(reference_check)
         if not fresh:
             status.update(state="no_data", message="No new readings from the sensors. Check the measurement log.")
             return status
-        if self.recording:
-            status.update(state="calibrating", message="Recording clean air. Keep smells away from the sensors.")
-            return status
-        if not warm and not skipped:
-            status.update(state="warming", message="Waiting for the sensors to settle before analysing.")
-            return status
         if refs is None:
-            status.update(state="no_reference", message=reference["hint"])
+            status.update(state="no_reference", message="The model has no training clean air for these heater profiles.")
             return status
-        window_ready_at = first_t + (warmup if not skipped else 0) * 1000 + model["window_seconds"] * 1000
+        # first prediction after one full window of data
+        window_ready_at = first_t + model["window_seconds"] * 1000
         if last_t < window_ready_at:
             status.update(state="collecting", message="Collecting the first analysis window.",
                           collecting_remaining_s=round((window_ready_at - last_t) / 1000))
             return status
-        status["warnings"] = []  # reference notes are shown elsewhere
-        if skipped and not warm:
-            status["warnings"].append("Warm-up was skipped. Predictions during warm-up are often wrong.")
+        status["warnings"] = []
         interval_ms = model["prediction_interval_seconds"] * 1000
         due = self.result is None or self.last_prediction_t is None or last_t - self.last_prediction_t >= interval_ms
         status.update(state="ready", message="", due=due,
@@ -783,7 +788,7 @@ class Predictor:
                                "p": round(probabilities[i], 4)} for i in order],
             "t_ms": t_end, "time": iso(t_end), "window_seconds": window,
             "missing_features": out["missing"], "unusual_features": out["unusual"], "max_z": round(out["max_z"], 2),
-            "reference": ctx["reference"]["source"], "warnings": list(status["warnings"]),
+            "reference": ctx["reference"]["board"] if not ctx["reference"]["averaged"] else "average", "warnings": list(status["warnings"]),
             "message": status.get("message", ""),
         }
         self._log(model, self.result)
@@ -808,103 +813,3 @@ class Predictor:
                              + f",{result['reference']},{result['missing_features']},{result['unusual_features']},\"{warnings}\"\n")
         except OSError:
             pass
-
-    # clean-air recording
-    def start_recording(self, duration_s=CALIBRATION_SECONDS, now_ms=None):
-        if not self.is_running():
-            raise ValueError("Start a measurement first: the sensors only run while measuring.")
-        if self.recording:
-            raise ValueError("Clean air is already being recorded.")
-        if not 60 <= duration_s <= 1800:
-            raise ValueError("The recording must last 1 to 30 minutes.")
-        now_ms = now_ms or self.data.last_t() or int(time.time() * 1000)
-        with self.lock:
-            self.recording = {"start_ms": now_ms, "end_ms": now_ms + int(duration_s * 1000),
-                              "duration_s": duration_s, "session": self.session_key()}
-            self.last_calibration = None
-            if self.status_cache:
-                self.status_cache["state"] = "calibrating"
-        return self._calibration_view()
-
-    def cancel_recording(self):
-        with self.lock:
-            self.recording = None
-
-    def _calibration_view(self):
-        rec = self.recording
-        last = self.last_calibration
-        if last and time.time() - last.get("at", 0) > 120:  # show the outcome for two minutes
-            last = self.last_calibration = None
-        view = {"recording": bool(rec), "last": last}
-        if rec:
-            last_t = self.data.last_t() or rec["start_ms"]
-            view.update(duration_s=rec["duration_s"],
-                        remaining_s=max(0, round((rec["end_ms"] - max(last_t, rec["start_ms"])) / 1000)))
-        cal = self.calibration()
-        if isinstance(cal, dict):
-            view["saved"] = {"recorded_at": cal.get("recorded_at"),
-                             "sensors": sorted(int(s) for s in (cal.get("sensors") or {})),
-                             "warnings": cal.get("warnings") or [], "during_warmup": cal.get("during_warmup", False)}
-        return view
-
-    def _finish_recording(self):
-        rec = self.recording
-        if not rec:
-            return
-        last_t = self.data.last_t()
-        if last_t is None or last_t < rec["end_ms"]:
-            return
-        cycles = self.data.cycles_by_sensor()
-        setup = sensor_setup(self.read_config())
-        mid = (rec["start_ms"] + rec["end_ms"]) / 2
-        sensors, warnings, worst = {}, [], 0.0
-        for sensor, items in cycles.items():
-            inside = [c for c in items if rec["start_ms"] <= c[0] < rec["end_ms"]]
-            if len(inside) < CALIBRATION_MIN_CYCLES or sensor not in setup:
-                continue
-            ln_r0 = [median([c[1][i] for c in inside]) for i in range(10)]
-            first = [median([c[1][i] for c in inside if c[0] < mid]) for i in range(10)]
-            second = [median([c[1][i] for c in inside if c[0] >= mid]) for i in range(10)]
-            changes = [abs(a - b) for a, b in zip(first, second) if a is not None and b is not None]
-            change = median(changes) or 0.0
-            worst = max(worst, change)
-            sensors[str(sensor)] = {"profile": setup[sensor]["name"], "signature": setup[sensor]["signature"],
-                                    "ln_r0": ln_r0, "cycles": len(inside), "change": round(change, 4)}
-        if not sensors:
-            with self.lock:
-                self.recording = None
-                self.last_calibration = {"ok": False, "at": time.time(), "message": "Not enough sensor data was recorded. Try again."}
-            return
-        missing = [s for s in setup if str(s) not in sensors]
-        if missing:
-            warnings.append(f"Sensors {', '.join(map(str, missing))} sent too little data and have no clean-air value.")
-        if worst > CALIBRATION_STABLE:
-            warnings.append("The readings changed during the clean-air recording (sensors still warming up, or a smell nearby).")
-        first_t = self.data.first_t
-        model = self.store.active()
-        warmup = model["warmup_seconds"] if model else 900
-        during_warmup = bool(first_t and (rec["start_ms"] - first_t) / 1000 < warmup)
-        if during_warmup:
-            warnings.append("Clean air was recorded during warm-up, so it may not match the warmed-up sensors.")
-        payload = {"recorded_at": iso(rec["end_ms"]), "recorded_ms": rec["end_ms"], "duration_s": rec["duration_s"],
-                   "sensors": sensors, "warnings": warnings, "during_warmup": during_warmup,
-                   "stability": round(worst, 4)}
-        write_json_atomic(self.calibration_path, payload)
-        with self.lock:
-            self.recording = None
-            self.last_calibration = {"ok": True, "warnings": warnings, "at": time.time(),
-                                     "message": "Clean air saved." + (" Check the notes." if warnings else "")}
-            self.result, self.last_prediction_t = None, None
-
-    def skip_warmup(self):
-        if not self.is_running():
-            raise ValueError("Start a measurement first.")
-        self.skip_warmup_key = self.session_key()
-
-
-def median(values):
-    values = sorted(v for v in values if v is not None)
-    if not values:
-        return None
-    middle = len(values) // 2
-    return values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2

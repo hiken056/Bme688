@@ -83,10 +83,6 @@ class ActiveModelRequest(BaseModel):
     id: Optional[str] = None
 
 
-class CalibrationRequest(BaseModel):
-    duration_seconds: int = classifier.CALIBRATION_SECONDS
-
-
 def normalize_config(payload: dict) -> dict:
     # support config files made before the sleep key was renamed
     for preset in payload.get("presets", []):
@@ -657,30 +653,6 @@ def delete_model(model_id: str):
 @app.get("/api/prediction")
 def get_prediction():
     return predictor.snapshot()
-
-
-@app.post("/api/prediction/skip-warmup")
-def skip_warmup():
-    try:
-        predictor.skip_warmup()
-    except ValueError as error:
-        return api_error(str(error), 409)
-    return {"status": "success"}
-
-
-@app.post("/api/calibration/start")
-def start_calibration(request: CalibrationRequest):
-    try:
-        calibration = predictor.start_recording(request.duration_seconds)
-    except ValueError as error:
-        return api_error(str(error), 409)
-    return {"status": "success", "calibration": calibration}
-
-
-@app.post("/api/calibration/cancel")
-def cancel_calibration():
-    predictor.cancel_recording()
-    return {"status": "success"}
 
 
 app.mount("/static", StaticFiles(directory=INTERFACE_DIR, html=True), name="static")

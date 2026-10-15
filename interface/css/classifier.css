@@ -423,12 +423,7 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
 .prediction-reference-copy { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
 .prediction-reference-copy strong { font-size: 0.82rem; font-weight: 500; overflow-wrap: anywhere; }
 .prediction-reference-note { color: var(--muted); font-size: 0.72rem; line-height: 1.55; }
-.prediction-reference[data-state="none"] strong { color: #e0aa71; }
-.prediction-reference[data-state="recording"] strong { color: var(--primary-h); }
-.prediction-reference-message { color: var(--success); font-size: 0.72rem; line-height: 1.55; }
-.prediction-reference-message.is-error { color: #ed948c; }
-.prediction-reference button { font-family: inherit; cursor: pointer; }
-.prediction-reference button:disabled { opacity: 0.4; cursor: default; }
+.prediction-reference[data-state="model"] .prediction-reference-note { color: #e0aa71; }
 .prediction-checks { border-top: 1px solid var(--glass-border); }
 .prediction-checks[hidden] { display: none; }
 .prediction-checks summary {
@@ -486,12 +481,7 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
     font-family: inherit;
     cursor: pointer;
 }
-.air-steps { display: grid; gap: 0.45rem; padding-left: 1.1rem; color: var(--muted); font-size: 0.78rem; line-height: 1.55; }
-.session-form > p.air-warning { padding: 0.75rem; border: 1px solid rgba(224,170,113,0.25); border-radius: 8px; color: #e0aa71; font-size: 0.75rem; line-height: 1.6; }
-.session-form > p.air-warning[hidden] { display: none; }
-.air-dialog .session-error:empty { display: none; }
-.air-dialog .session-actions button:disabled { opacity: 0.45; cursor: default; }
-
+.session-form > p.session-form > p
 @keyframes prediction-pulse { 50% { border-color: rgba(129,116,235,0.5); background: rgba(108,92,231,0.15); } }
 
 @media (min-width: 1101px) {
@@ -526,7 +516,6 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
     .prediction-confidence > span { font-size: 0.6rem; }
     .prediction-placeholder { min-height: 260px; }
     .prediction-reference { align-items: flex-start; flex-direction: column; }
-    .prediction-reference button { width: 100%; }
     .prediction-demo-controls { grid-template-columns: minmax(0, 1fr); gap: 0.65rem; }
     .prediction-demo-controls select { min-height: 44px; font-size: 1rem; }
     .classifier-panel { padding: 1.25rem; min-height: calc(100dvh - var(--topbar-h) - 2rem); }

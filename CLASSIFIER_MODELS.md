@@ -1,13 +1,12 @@
 # Classifier on the device
 
-The Pi stores the models and makes the predictions. The interface only uploads models, shows the results
-and starts the clean-air recording. Predictions continue when no phone is connected.
+The Pi stores the models and makes the predictions. The interface only uploads models and shows the results.
+Predictions continue when no phone is connected.
 
 | What | Where on the Pi |
 |---|---|
 | Models | `/var/lib/bme688/models/` |
 | Selected model | `/var/lib/bme688/active_model.json` |
-| Clean air recorded on the device | `/var/lib/bme688/calibration.json` |
 | Predictions | `predictions.csv` next to the sensor files of each recording |
 
 The code is in `backend/classifier.py`. It uses plain Python only, so nothing extra has to be installed on the Pi.
@@ -18,8 +17,7 @@ Export it with the notebook (`clasificator/smell_classifier.ipynb`, section 7). 
 
 - `metadata`: name, version, classes, timings and `profile_requirements` (below);
 - `model`: the feature names, the scaling values, the weights (`coef`, `intercept`) and `unknown_below`;
-- `clean_air_reference` (optional): the clean air of each training board. The notebook and the parity test use it;
-  the Pi ignores it and always uses clean air recorded on the device.
+- `clean_air_reference`: the clean air of each training board, which the Pi uses as the reference.
 
 Only multinomial logistic regression on curve-shape features (`<profile>_shape_s<step>`) is supported.
 The upload is refused, with the reason, when the file is not valid JSON, a section is missing, the numbers don't match
@@ -54,19 +52,15 @@ The check compares temperatures, ticks, mode, duty and sleep. Profile names are 
 free: the sensors are matched by settings, in ascending sensor order, by both the interface and the Pi. On a mismatch,
 the panel offers **Use model profiles**, which shows the changes and asks for confirmation before saving the configuration.
 
-## Clean-air reference
+## Clean-air reference (simple version for now)
 
-Every prediction compares the smell with clean air recorded on the same device (**Record clean air**: 5 minutes,
-during a measurement). It doesn't depend on which board it is. The recording is kept when the measurement stops and
-is replaced by the next one. Without it there are no predictions, and the panel asks you to record clean air.
+Every prediction compares the smell with the clean air the model was trained with:
+- the Pi reads its board from the device name: `bme688-01` is bme1, `bme688-02` is bme2, and so on;
+- if the model has clean air for that board, each sensor uses its own training value;
+- if not (board 3, or another device name), it uses the average of the training boards, with a note.
 
-A recording is saved even when something looks wrong, but with a note:
-- it was made during warm-up;
-- the readings changed between the two halves of the recording (more than 0.15 in ln R; clean air after warm-up
-  stays below 0.1);
-- a sensor sent too little data.
-
-A recording is used only for sensors whose profile is unchanged since it was made.
+The training clean air is from September, and the sensors have drifted since, so clean air can come out as "unknown"
+or "spicy". Next step: learning the background air on the device before each sample.
 
 ## Checks before each prediction
 
@@ -74,8 +68,7 @@ A recording is used only for sensors whose profile is unchanged since it was mad
 |---|---|
 | Heater profiles match the model | No predictions; "Use model profiles" |
 | Sensor data arriving | "No sensor data" |
-| Sensors warmed up (`warmup_seconds`, 15 min for v0.2) | Countdown; "Predict now, without waiting" skips it with a warning |
-| Clean-air reference available | "Record clean air first" |
+| Training clean air for these profiles | "No clean-air reference" |
 | Enough heater cycles in the window (at least half of the expected number) and at most 25% missing values | "Not enough data" |
 | Pattern similar to the training data (fewer than 3 values more than 5 standard deviations away; no training window had any beyond 4) | "Unusual pattern", no class |
 | Top probability at least `unknown_below` (60%) | "Unknown" with the closest class |
@@ -83,7 +76,7 @@ A recording is used only for sensors whose profile is unchanged since it was mad
 ## Tests
 
 ```bash
-python -m unittest tests.test_classifier_device        # model checks, clean air, prediction states
+python -m unittest tests.test_classifier_device        # model checks, prediction states
 BME_ROOT=masuratori python -m unittest tests.test_classifier_parity   # same numbers as the notebook (needs .venv-ml and the data)
 node tests/test_classifier_profiles.mjs                 # profile matching in the interface
 ```

@@ -83,7 +83,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const facts = [
                 ['Sensors', `${model.sensors.length} sensors`],
                 ['Analysis window', minutes(model.window_seconds)],
-                ['Warm-up', minutes(model.warmup_seconds)],
                 ['Prediction interval', minutes(model.prediction_interval_seconds)]
             ];
             if (model.accuracy?.unseen_board) {
@@ -95,7 +94,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 ['Version', `v${model.version}`],
                 ['File size', preview.formatSize(model.size_bytes)],
                 ...(model.uploaded_at ? [['Added', shortDate(model.uploaded_at)]] : []),
-                ...(model.filename ? [['File', model.filename]] : [])
+                ...(model.filename ? [['File', model.filename]] : []),
+                ...(model.references?.length ? [['Training clean air', model.references.map(ref => ref.board).join(', ')]] : [])
             ].map(([label, value]) => `<div><dt>${label}</dt><dd>${preview.escapeHtml(value)}</dd></div>`).join('');
             renderTags('classifier-classes', model.class_labels || model.classes.map(preview.classLabel));
             document.getElementById('classifier-profiles').innerHTML = preview.profileGroups(model).map(group =>

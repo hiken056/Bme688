@@ -25,7 +25,7 @@ def make_payload():
     return {
         "metadata": {
             "name": "Test model", "version": "1.0", "classes": ["clean_air", "smell"],
-            "window_seconds": 120, "warmup_seconds": 600, "prediction_interval_seconds": 30,
+            "window_seconds": 120, "warmup_seconds": 900, "prediction_interval_seconds": 30,
             "profile_requirements": [
                 {"profile": p, "count": 2, "mode": "parallel", "duty": 0, "sleep": 0, "temps": t, "ticks": k}
                 for p, (t, k) in PROFILES.items()
@@ -71,6 +71,9 @@ class DeviceTestCase(unittest.TestCase):
         model = self.predictor.store.add(make_payload(), "test.json", 100)
         self.predictor.store.set_active(model["id"])
         self.t = T0
+        # the device name says which board this is
+        self.board = patch.object(classifier, "board_name", return_value="bme7").start()
+        self.addCleanup(patch.stopall)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -95,14 +98,6 @@ class DeviceTestCase(unittest.TestCase):
         self.predictor.tick(now_ms=self.t)
         return self.predictor.snapshot()
 
-    def save_clean_air(self):
-        # same file as Record clean air
-        setup = classifier.sensor_setup(self.config)
-        classifier.write_json_atomic(self.state / "calibration.json", {
-            "recorded_at": "2026-09-22T10:00:00", "recorded_ms": self.t, "warnings": [],
-            "sensors": {str(s): {"profile": setup[s]["name"], "signature": setup[s]["signature"], "ln_r0": [CLEAN] * 10}
-                        for s in setup}})
-
 
 class ModelChecks(unittest.TestCase):
     def test_valid_model_passes(self):
@@ -122,6 +117,7 @@ class ModelChecks(unittest.TestCase):
             (lambda d: d["metadata"].pop("profile_requirements"), "profile_requirements"),
             (lambda d: d["metadata"]["profile_requirements"][0].update(count=7), "more than 8"),
             (lambda d: d["model"]["impute_median"].__setitem__(0, float("nan")), "impute_median"),
+            (lambda d: d.pop("clean_air_reference"), "no clean_air_reference"),
         ]
         for change, message in cases:
             payload = copy.deepcopy(make_payload())
@@ -156,27 +152,17 @@ class StorageTests(DeviceTestCase):
 
 class PredictionStates(DeviceTestCase):
     def test_full_flow(self):
-        self.write(2)
+        self.write(1)
         status = self.tick()
-        self.assertEqual(status["state"], "warming")
-        self.assertGreater(status["measurement"]["warmup_remaining_s"], 0)
+        self.assertEqual(status["state"], "collecting")
 
-        self.write(9)
-        self.assertEqual(self.tick()["state"], "no_reference")
-
-        # record clean air
-        self.predictor.start_recording(300)
-        self.assertEqual(self.tick()["state"], "calibrating")
-        self.write(5.5)
+        # first prediction after one window, no warm-up
+        self.write(1.5)
         status = self.tick()
-        self.assertTrue(status["calibration"]["last"]["ok"], status["calibration"])
-        self.assertEqual(status["calibration"]["saved"]["sensors"], [1, 2, 3, 4])
-
-        self.write(2.5)
-        status = self.tick()
-        self.assertEqual(status["reference"]["source"], "device")
+        self.assertEqual(status["reference"]["board"], "bme7")
+        self.assertFalse(status["reference"]["averaged"])
         self.assertEqual(status["result"]["label"], "clean_air")
-        self.assertTrue(all(check["ok"] for check in status["checks"]), status["checks"])
+        self.assertTrue(all(check["ok"] and not check.get("warn") for check in status["checks"]), status["checks"])
 
         self.write(2.5, shift=0.3)
         status = self.tick()
@@ -184,21 +170,23 @@ class PredictionStates(DeviceTestCase):
         log = (self.run_dir / "predictions.csv").read_text().splitlines()
         self.assertTrue(log[0].startswith("Timestamp_ms,Time,Model"))
         self.assertIn(",smell,", log[-1])
+        self.assertIn(",bme7,", log[-1])
 
-    def test_stored_training_clean_air_is_never_used(self):
-        self.write(13)
+    def test_unknown_board_uses_the_training_average(self):
+        self.board.return_value = None
+        self.write(2.5)
         status = self.tick()
-        self.assertEqual(status["state"], "no_reference")
-        self.assertIsNone(status["result"])
-
-    def test_warmup_can_be_skipped(self):
-        self.save_clean_air()
-        self.write(3)
-        self.assertEqual(self.tick()["state"], "warming")
-        self.predictor.skip_warmup()
-        status = self.tick()
+        self.assertTrue(status["reference"]["averaged"])
         self.assertEqual(status["result"]["label"], "clean_air")
-        self.assertTrue(status["measurement"]["warmup_skipped"])
+        reference_check = [c for c in status["checks"] if c["id"] == "reference"][0]
+        self.assertTrue(reference_check["ok"] and reference_check["warn"])
+
+    def test_moved_sensors_use_the_board_average(self):
+        self.config["assignments"] = {"1": "p1", "2": "p1", "3": "p0", "4": "p0"}
+        self.write(2.5)
+        status = self.tick()
+        self.assertIn("averaged", status["reference"]["label"])
+        self.assertEqual(status["result"]["label"], "clean_air")
 
     def test_profile_mismatch_stops_predictions(self):
         self.config = make_config(swap_ticks=True)
@@ -208,38 +196,24 @@ class PredictionStates(DeviceTestCase):
         self.assertIn("hp_301_basic", status["issues"][0])
 
     def test_unusual_pattern_is_not_classified(self):
-        self.save_clean_air()
-        self.write(11)
+        self.write(1)
         self.write(2.5, shift=3.0)
         status = self.tick()
         self.assertEqual(status["result"]["state"], "unusual")
         self.assertIsNone(status["result"]["label"])
 
     def test_stale_data_is_reported(self):
-        self.save_clean_air()
-        self.write(12)
+        self.write(3)
         self.predictor.tick(now_ms=self.t + 10 * 60000)
         self.assertEqual(self.predictor.snapshot()["state"], "no_data")
 
-    def test_unstable_clean_air_gets_a_warning(self):
-        self.write(11)
+    def test_stopping_clears_the_prediction(self):
+        self.write(3)
         self.tick()
-        self.predictor.start_recording(300)
-        self.write(2.5)
-        self.write(3, drift=0.4)
-        status = self.tick()
-        self.assertTrue(status["calibration"]["last"]["ok"])
-        self.assertTrue(any("changed" in w for w in status["calibration"]["last"]["warnings"]))
-
-    def test_stopping_cancels_a_recording(self):
-        self.write(11)
-        self.predictor.start_recording(300)
         self.running = False
         status = self.tick()
         self.assertEqual(status["state"], "idle")
-        self.assertFalse(status["calibration"]["last"]["ok"])
-        with self.assertRaises(ValueError):
-            self.predictor.start_recording(300)
+        self.assertIsNone(status["result"])
 
 
 class ApiLocks(unittest.TestCase):
