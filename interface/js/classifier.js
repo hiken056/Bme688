@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="model-symbol" aria-hidden="true"></span>
                 <span class="classifier-model-copy">
                     <strong>${preview.escapeHtml(model.name)}</strong>
-                    <span>v${preview.escapeHtml(model.version)} · ${model.classes.length} classes${model.accuracy?.unseen_board ? ` · ${Math.round(model.accuracy.unseen_board * 100)}% accuracy` : ''} · ${preview.formatSize(model.size_bytes)}</span>
+                    <span>v${preview.escapeHtml(model.version)}, ${model.classes.length} classes${model.accuracy?.unseen_board ? `, ${Math.round(model.accuracy.unseen_board * 100)}% accuracy` : ''}, ${preview.formatSize(model.size_bytes)}</span>
                 </span>
                 <span class="model-status ${model.id === state.activeId ? 'selected-status' : ''}">${model.id === state.activeId ? 'Selected' : 'Select'}</span>`;
             button.addEventListener('click', () => {

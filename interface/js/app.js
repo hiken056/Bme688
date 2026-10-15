@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sessionMatch = document.getElementById('session-match-profiles');
 
     let isRunning = false;
+    let sensorsStarted = false;
     let liveInterval = null;
     let activeFolderName = null;
 
@@ -178,7 +179,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 .then(r => r.json())
                 .then(res => {
                     if (res.status === 'success' && res.logs) {
-                        if (res.logs.includes('[S') || res.logs.includes('Collecting data') || res.logs.includes('[OK] Sensor')) {
+                        // file messages push the start messages out of the log tail
+                        sensorsStarted = sensorsStarted || ['[S', 'Collecting data', '[OK] Sensor', '[FILE]'].some(text => res.logs.includes(text));
+                        if (sensorsStarted) {
                             const name = activeFolderName || 'measurements';
                             statusLog.innerHTML = `<p class="running-text" style="color:var(--success);">Writing to ${name}</p>`;
                         } else {
@@ -192,6 +195,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function stopUI() {
         if (!isRunning) return;
         isRunning = false;
+        sensorsStarted = false;
         activeFolderName = null;
         duration.disabled = false;
         btn.textContent = 'START';

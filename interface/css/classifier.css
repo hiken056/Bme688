@@ -410,20 +410,7 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
 .prediction-panel summary:focus-visible,
 .mobile-nav-links a:focus-visible { outline: 2px solid var(--primary-h); outline-offset: 4px; }
 
-/* clean air and checks */
-.prediction-reference {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 1rem 0;
-    border-top: 1px solid var(--glass-border);
-}
-.prediction-reference[hidden] { display: none; }
-.prediction-reference-copy { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
-.prediction-reference-copy strong { font-size: 0.82rem; font-weight: 500; overflow-wrap: anywhere; }
-.prediction-reference-note { color: var(--muted); font-size: 0.72rem; line-height: 1.55; }
-.prediction-reference[data-state="model"] .prediction-reference-note { color: #e0aa71; }
+/* checks and warnings */
 .prediction-checks { border-top: 1px solid var(--glass-border); }
 .prediction-checks[hidden] { display: none; }
 .prediction-checks summary {
@@ -515,8 +502,7 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
     .prediction-confidence strong { font-size: 1.9rem; }
     .prediction-confidence > span { font-size: 0.6rem; }
     .prediction-placeholder { min-height: 260px; }
-    .prediction-reference { align-items: flex-start; flex-direction: column; }
-    .prediction-demo-controls { grid-template-columns: minmax(0, 1fr); gap: 0.65rem; }
+        .prediction-demo-controls { grid-template-columns: minmax(0, 1fr); gap: 0.65rem; }
     .prediction-demo-controls select { min-height: 44px; font-size: 1rem; }
     .classifier-panel { padding: 1.25rem; min-height: calc(100dvh - var(--topbar-h) - 2rem); }
     .classifier-page-header { align-items: flex-start; padding-bottom: 1.2rem; }

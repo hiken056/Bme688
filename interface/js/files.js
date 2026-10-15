@@ -200,7 +200,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="folder-icon" aria-hidden="true"></span>
                     <div class="measurement-title">
                         <h2>${escapeHtml(group.display_name)}</h2>
-                        <p>${group.runs.length} ${group.runs.length === 1 ? 'recording' : 'recordings'} · ${formatSize(group.size_bytes)}</p>
+                        <p>${group.runs.length} ${group.runs.length === 1 ? 'recording' : 'recordings'}, ${formatSize(group.size_bytes)}</p>
                     </div>
                     <button class="folder-download download-action" type="button" data-group="${group.groupIndex}">
                         ${downloadIcon()}<span>Download folder</span>

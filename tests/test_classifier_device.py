@@ -163,6 +163,7 @@ class PredictionStates(DeviceTestCase):
         self.assertFalse(status["reference"]["averaged"])
         self.assertEqual(status["result"]["label"], "clean_air")
         self.assertTrue(all(check["ok"] and not check.get("warn") for check in status["checks"]), status["checks"])
+        self.assertTrue(0 <= status["next_prediction_s"] <= 30)
 
         self.write(2.5, shift=0.3)
         status = self.tick()

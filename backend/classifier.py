@@ -663,6 +663,10 @@ class Predictor:
             status["checks"].extend(self.result_checks)
             status["state"] = self.result["state"]
             status["message"] = self.result.get("message", "")
+        if self.last_prediction_t is not None and status.get("state") in ("ready", "unknown", "unusual", "insufficient"):
+            last_t = self.data.last_t() or self.last_prediction_t
+            due = self.last_prediction_t + model["prediction_interval_seconds"] * 1000
+            status["next_prediction_s"] = max(0, round((due - last_t) / 1000))
         status.pop("due", None)
         status.pop("_ctx", None)
         with self.lock:

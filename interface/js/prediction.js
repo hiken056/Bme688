@@ -3,11 +3,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const result = document.getElementById('prediction-result');
     const updated = document.getElementById('prediction-updated');
     const windowLabel = document.getElementById('prediction-window');
-    const stateSelect = document.getElementById('prediction-demo-state');
     const checksBox = document.getElementById('prediction-checks');
     const checksSummary = document.getElementById('prediction-checks-summary');
     const checksList = document.getElementById('prediction-checks-list');
-    const referenceBox = document.getElementById('prediction-reference');
+    const stateSelect = document.getElementById('prediction-demo-state');
     const matchDialog = document.getElementById('profile-match-dialog');
     const matchForm = document.getElementById('profile-match-form');
     const matchError = document.getElementById('profile-match-error');
@@ -23,8 +22,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let live = null;
     let liveError = '';
     let liveTimer = null;
-    const demoReference = { source: 'training', board: 'bme1', averaged: false, recorded_at: '2026-09-22T17:11:58',
-        label: 'Training clean air of bme1' };
+    // countdown to the next prediction
+    let nextAt = null;
+    let nextKind = 'next';
 
     document.getElementById('prediction-demo-controls').hidden = !preview.showControls;
 
@@ -169,32 +169,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const warned = checks.filter(item => item.ok && item.warn).length;
         checksBox.hidden = false;
         checksBox.dataset.state = failed ? 'fail' : warned ? 'warn' : 'ok';
-        checksSummary.textContent = failed ? `Checks · ${failed} not passed` : warned ? `Checks · ${warned} with notes` : `Checks · all ${checks.length} passed`;
+        const plural = count => count === 1 ? 'check' : 'checks';
+        checksSummary.textContent = failed ? `${failed} ${plural(failed)} not passed` : warned ? `${warned} ${plural(warned)} with notes`
+            : `All ${checks.length} checks passed`;
         checksList.innerHTML = checks.map(item => {
             const state = !item.ok ? 'fail' : item.warn ? 'warn' : 'ok';
             const mark = state === 'ok' ? '✓' : state === 'warn' ? '!' : '✕';
             return `<li class="is-${state}"><span class="prediction-check-mark" aria-hidden="true">${mark}</span>
                 <span><strong>${preview.escapeHtml(item.label)}</strong>${item.detail ? `<span>${preview.escapeHtml(item.detail)}</span>` : ''}</span></li>`;
         }).join('');
-    }
-
-    // clean-air strip under the result
-    function renderReference(reference) {
-        if (!preview.activeModel() || !reference) {
-            referenceBox.hidden = true;
-            return;
-        }
-        referenceBox.hidden = false;
-        referenceBox.dataset.state = reference.averaged ? 'model' : 'device';
-        const note = reference.averaged
-            ? `This device's board was not found in the model (${(reference.boards || []).join(', ')}), so the average is used.`
-            : `Recorded during training${reference.recorded_at ? `, ${day(reference.recorded_at)}` : ''}. Read from the device name.`;
-        referenceBox.innerHTML = `
-            <div class="prediction-reference-copy">
-                <span class="classifier-label">Clean-air reference</span>
-                <strong>${preview.escapeHtml(reference.label)}</strong>
-                <span class="prediction-reference-note">${preview.escapeHtml(note)}</span>
-            </div>`;
     }
 
     async function request(url, options = {}) {
@@ -315,6 +298,9 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             live = await preview.api('/api/prediction', {}, 5000);
             liveError = '';
+            const seconds = live.next_prediction_s ?? live.collecting_remaining_s;
+            nextKind = live.next_prediction_s != null ? 'next' : 'first';
+            nextAt = live.running && seconds != null ? Date.now() + seconds * 1000 : null;
             if (live.running && !measuring) measuring = true;
         } catch (error) {
             liveError = error.message;
@@ -389,18 +375,20 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function renderCountdown() {
+        if (preview.isDemo || !measuring || !nextAt || !preview.activeModel()) return;
+        const seconds = Math.ceil((nextAt - Date.now()) / 1000);
+        updated.textContent = seconds > 0
+            ? `${nextKind === 'first' ? 'First' : 'Next'} prediction in ${duration(seconds)}`
+            : 'Next prediction any moment';
+    }
+
     function render() {
         const model = preview.activeModel();
         const loading = preview.modelsStatus();
-        document.getElementById('prediction-model-name').textContent = model ? `${model.name} · v${model.version}` : 'No model selected';
-        windowLabel.textContent = model ? `${model.window_seconds} s window · every ${model.prediction_interval_seconds} s` : '';
-        if (!preview.isDemo) {
-            renderReference(live?.reference);
-            renderChecks(model && live?.model?.id === model.id ? live.checks : null);
-        } else {
-            renderReference(demoReference);
-            checksBox.hidden = true;
-        }
+        document.getElementById('prediction-model-name').textContent = model ? `${model.name} v${model.version}` : 'No model selected';
+        windowLabel.textContent = !model ? '' : live?.reference?.averaged ? 'Uses average reference air' : 'Uses reference air';
+        renderChecks(!preview.isDemo && model && live?.model?.id === model.id ? live.checks : null);
         if (!model) {
             if (loading.status === 'loading') renderState('loading', null);
             else if (loading.status === 'unavailable') renderState('disconnected', null, loading.message);
@@ -417,6 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             renderState(demoState, model);
         }
+        renderCountdown();
     }
 
     stateSelect.addEventListener('change', () => {
@@ -428,6 +417,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('measurement-ui-change', event => {
         const wasMeasuring = measuring;
         measuring = event.detail.running;
+        if (!measuring) nextAt = null;
         previewOverride = false;
         preview.refreshConfiguration();
         if (preview.isDemo) {
@@ -476,4 +466,5 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!preview.isDemo) setInterval(() => {
         if (!document.hidden) preview.refreshConfiguration();
     }, 10000);
+    setInterval(renderCountdown, 1000);
 });
