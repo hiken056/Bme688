@@ -10,7 +10,7 @@ import unittest
 
 PROJECT = Path(__file__).resolve().parents[1]
 
-# Run the real shell script with simulated system services and networking.
+# run the real shell script with fake system services and networking
 FAKE_COMMAND = r'''
 import json, os, pathlib, shutil, sys
 path = pathlib.Path(os.environ['AP_TEST_STATE'])
@@ -308,7 +308,7 @@ class AccessPointSetupTests(unittest.TestCase):
         self.run_script()
         self.run_script('--activate')
         self.assertFalse(self.state()['enabled'])
-        # /run and runtime device ownership are reset by a reboot.
+        # a reboot resets /run and device ownership
         shutil.rmtree(self.root / 'transaction')
         self.set_state(active='old', managed=True, services=[], timers=[])
         self.run_script()

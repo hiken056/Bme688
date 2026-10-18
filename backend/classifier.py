@@ -23,6 +23,10 @@ TICK_S = 0.14                  # heater time base in parallel mode
 KEEP_MS = 20 * 60 * 1000       # cycles kept per sensor
 LOOP_SECONDS = 3
 
+# clean air from the measurement: minutes 5-10, the first minutes are still settling
+MEASURED_REFERENCE_FROM_S = 300
+MEASURED_REFERENCE_TO_S = 600
+
 # limits from the training data
 UNUSUAL_Z = 5.0                # no training window went past 4
 UNUSUAL_COUNT = 3
@@ -604,6 +608,7 @@ def training_reference(model, mapping, board):
         label = "Average training clean air" + (f" ({board} is not in the model)" if board else "")
     complete = all(any(s in refs for s in sensors) for sensors in mapping.values())
     reference = {"source": "training", "board": board, "boards": sorted(stored), "averaged": averaged or board not in stored,
+                 "log": board if board in stored and not averaged else "average",
                  "recorded_at": stored[board].get("recorded_at") if board in stored else None, "label": label}
     return (refs if complete else None), reference
 
@@ -620,6 +625,7 @@ class Predictor:
         self.lock = threading.Lock()
         self.result = None
         self.result_checks = []        # checks of the last prediction
+        self.measured = None           # clean air from the running measurement
         self.status_cache = None
         self.last_prediction_t = None
         self.thread = None
@@ -700,6 +706,12 @@ class Predictor:
             status.update(state="incompatible", message="The heater profiles don't match the model.", issues=issues)
             return status
         refs, reference = training_reference(model, mapping, board_name())
+        if running:
+            measured = self._measured_reference()
+            if measured:
+                # sensors without a measured value keep the training value
+                refs = {s: measured["refs"].get(s, (refs or {}).get(s)) for sensors in mapping.values() for s in sensors}
+                reference = measured["reference"]
         status["reference"] = reference
         reference_check = {"id": "reference", "ok": refs is not None, "warn": reference["averaged"],
                            "label": "Clean-air reference", "detail": reference["label"]}
@@ -738,6 +750,41 @@ class Predictor:
         status.update(state="ready", message="", due=due,
                       _ctx={"mapping": mapping, "refs": refs, "setup": setup, "reference": reference})
         return status
+
+    # clean air from minutes 5-10 of the running measurement, taken once per measurement
+    def _measured_reference(self):
+        key = self.session_key()
+        if self.measured and self.measured["key"] == key:
+            return self.measured
+        first_t, last_t = self.data.first_t, self.data.last_t()
+        if not first_t or not last_t or last_t < first_t + MEASURED_REFERENCE_TO_S * 1000:
+            return None
+        low, high = first_t + MEASURED_REFERENCE_FROM_S * 1000, first_t + MEASURED_REFERENCE_TO_S * 1000
+        middle = (low + high) / 2
+        refs, changes = {}, {}
+        for sensor, items in self.data.cycles_by_sensor().items():
+            inside = [c for c in items if low <= c[0] < high]
+            if len(inside) < 3:
+                continue
+            refs[sensor] = [median([c[1][i] for c in inside]) for i in range(10)]
+            first = [median([c[1][i] for c in inside if c[0] < middle]) for i in range(10)]
+            second = [median([c[1][i] for c in inside if c[0] >= middle]) for i in range(10)]
+            changes[sensor] = round(median([abs(a - b) for a, b in zip(first, second) if a is not None and b is not None]) or 0, 4)
+        if not refs:
+            return None
+        reference = {"source": "measurement", "board": None, "boards": [], "averaged": False, "log": "measurement",
+                     "recorded_at": iso(high), "label": "Clean air from minutes 5-10 of this measurement"}
+        self.measured = {"key": key, "refs": refs, "reference": reference}
+        # kept next to the recording, to compare later
+        run = self.data.newest_run()
+        if run:
+            try:
+                write_json_atomic(run / "reference.json", {
+                    "from": iso(low), "to": iso(high), "change_between_halves": changes,
+                    "ln_r0": {str(sensor): values for sensor, values in refs.items()}})
+            except OSError:
+                pass
+        return self.measured
 
     # prediction
     def _predict(self, model, status):
@@ -792,7 +839,7 @@ class Predictor:
                                "p": round(probabilities[i], 4)} for i in order],
             "t_ms": t_end, "time": iso(t_end), "window_seconds": window,
             "missing_features": out["missing"], "unusual_features": out["unusual"], "max_z": round(out["max_z"], 2),
-            "reference": ctx["reference"]["board"] if not ctx["reference"]["averaged"] else "average", "warnings": list(status["warnings"]),
+            "reference": ctx["reference"]["log"], "warnings": list(status["warnings"]),
             "message": status.get("message", ""),
         }
         self._log(model, self.result)
@@ -817,3 +864,11 @@ class Predictor:
                              + f",{result['reference']},{result['missing_features']},{result['unusual_features']},\"{warnings}\"\n")
         except OSError:
             pass
+
+
+def median(values):
+    values = sorted(v for v in values if v is not None)
+    if not values:
+        return None
+    middle = len(values) // 2
+    return values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2

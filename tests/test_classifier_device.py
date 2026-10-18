@@ -173,6 +173,34 @@ class PredictionStates(DeviceTestCase):
         self.assertIn(",smell,", log[-1])
         self.assertIn(",bme7,", log[-1])
 
+    def test_clean_air_from_the_measurement_after_ten_minutes(self):
+        # drifted sensors: clean air already looks like a smell next to the training reference
+        self.write(9, shift=0.3)
+        status = self.tick()
+        self.assertEqual(status["reference"]["source"], "training")
+        self.assertEqual(status["result"]["label"], "smell")
+
+        self.write(1.5, shift=0.3)
+        status = self.tick()
+        self.assertEqual(status["reference"]["source"], "measurement")
+        self.assertEqual(status["result"]["label"], "clean_air")
+        saved = json.loads((self.run_dir / "reference.json").read_text())
+        self.assertEqual(sorted(saved["ln_r0"]), ["1", "2", "3", "4"])
+
+        # a smell on top of the drift is still found
+        self.write(2.5, shift=0.6)
+        status = self.tick()
+        self.assertEqual(status["result"]["label"], "smell")
+        self.assertIn(",measurement,", (self.run_dir / "predictions.csv").read_text().splitlines()[-1])
+
+        # a new measurement starts with the training reference again
+        self.running = False
+        self.tick()
+        self.running = True
+        classifier.write_json_atomic(self.session, {"title_dir": str(self.run_dir.parent), "started_at": self.t / 1000 + 1})
+        self.predictor.data.first_t = None
+        self.assertNotEqual(self.predictor.measured["key"], self.predictor.session_key())
+
     def test_unknown_board_uses_the_training_average(self):
         self.board.return_value = None
         self.write(2.5)

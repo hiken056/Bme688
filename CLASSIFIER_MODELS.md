@@ -52,15 +52,17 @@ The check compares temperatures, ticks, mode, duty and sleep. Profile names are 
 free: the sensors are matched by settings, in ascending sensor order, by both the interface and the Pi. On a mismatch,
 the panel offers **Use model profiles**, which shows the changes and asks for confirmation before saving the configuration.
 
-## Clean-air reference (simple version for now)
+## Clean-air reference (test version)
 
-Every prediction compares the smell with the clean air the model was trained with:
-- the Pi reads its board from the device name: `bme688-01` is bme1, `bme688-02` is bme2, and so on;
-- if the model has clean air for that board, each sensor uses its own training value;
-- if not (board 3, or another device name), it uses the average of the training boards, with a note.
+Every prediction compares the smell with clean air:
+- for the first 10 minutes of a measurement, it uses the clean air the model was trained with. The Pi reads its board
+  from the device name (`bme688-01` is bme1, and so on). If the model has no clean air for that board, it uses the
+  average of the training boards, with a note;
+- from minute 10, it uses minutes 5-10 of the same measurement as clean air (the first 5 minutes are still settling).
+  This is saved as `reference.json` next to the recording, and `predictions.csv` shows `measurement` in the Reference column.
 
-The training clean air is from September, and the sensors have drifted since, so clean air can come out as "unknown"
-or "spicy". Next step: learning the background air on the device before each sample.
+So start every measurement in clean air, wait 10 minutes, then bring the sample without stopping.
+A new measurement starts with the training clean air again.
 
 ## Checks before each prediction
 
