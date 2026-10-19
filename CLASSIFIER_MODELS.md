@@ -55,13 +55,13 @@ the panel offers **Use model profiles**, which shows the changes and asks for co
 ## Clean-air reference (test version)
 
 Every prediction compares the smell with clean air:
-- for the first 10 minutes of a measurement, it uses the clean air the model was trained with. The Pi reads its board
+- for the first 15 minutes of a measurement, it uses the clean air the model was trained with. The Pi reads its board
   from the device name (`bme688-01` is bme1, and so on). If the model has no clean air for that board, it uses the
   average of the training boards, with a note;
-- from minute 10, it uses minutes 5-10 of the same measurement as clean air (the first 5 minutes are still settling).
+- from minute 15, it uses minutes 10-15 of the same measurement as clean air (the first 10 minutes are still settling).
   This is saved as `reference.json` next to the recording, and `predictions.csv` shows `measurement` in the Reference column.
 
-So start every measurement in clean air, wait 10 minutes, then bring the sample without stopping.
+So start every measurement in clean air, wait 15 minutes, then bring the sample without stopping.
 A new measurement starts with the training clean air again.
 
 ## Checks before each prediction

@@ -173,9 +173,9 @@ class PredictionStates(DeviceTestCase):
         self.assertIn(",smell,", log[-1])
         self.assertIn(",bme7,", log[-1])
 
-    def test_clean_air_from_the_measurement_after_ten_minutes(self):
+    def test_clean_air_from_the_measurement_after_fifteen_minutes(self):
         # drifted sensors: clean air already looks like a smell next to the training reference
-        self.write(9, shift=0.3)
+        self.write(14, shift=0.3)
         status = self.tick()
         self.assertEqual(status["reference"]["source"], "training")
         self.assertEqual(status["result"]["label"], "smell")

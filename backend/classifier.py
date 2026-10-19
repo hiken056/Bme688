@@ -23,9 +23,9 @@ TICK_S = 0.14                  # heater time base in parallel mode
 KEEP_MS = 20 * 60 * 1000       # cycles kept per sensor
 LOOP_SECONDS = 3
 
-# clean air from the measurement: minutes 5-10, the first minutes are still settling
-MEASURED_REFERENCE_FROM_S = 300
-MEASURED_REFERENCE_TO_S = 600
+# clean air from the measurement: minutes 10-15, the first minutes are still settling
+MEASURED_REFERENCE_FROM_S = 600
+MEASURED_REFERENCE_TO_S = 900
 
 # limits from the training data
 UNUSUAL_Z = 5.0                # no training window went past 4
@@ -751,7 +751,7 @@ class Predictor:
                       _ctx={"mapping": mapping, "refs": refs, "setup": setup, "reference": reference})
         return status
 
-    # clean air from minutes 5-10 of the running measurement, taken once per measurement
+    # clean air from minutes 10-15 of the running measurement, taken once per measurement
     def _measured_reference(self):
         key = self.session_key()
         if self.measured and self.measured["key"] == key:
@@ -773,7 +773,7 @@ class Predictor:
         if not refs:
             return None
         reference = {"source": "measurement", "board": None, "boards": [], "averaged": False, "log": "measurement",
-                     "recorded_at": iso(high), "label": "Clean air from minutes 5-10 of this measurement"}
+                     "recorded_at": iso(high), "label": "Clean air from minutes 10-15 of this measurement"}
         self.measured = {"key": key, "refs": refs, "reference": reference}
         # kept next to the recording, to compare later
         run = self.data.newest_run()
