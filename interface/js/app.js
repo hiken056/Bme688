@@ -5,7 +5,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const duration   = document.getElementById('measurement-duration');
     const sessionDialog = document.getElementById('session-dialog');
     const sessionForm   = document.getElementById('session-form');
-    const sessionTitle  = document.getElementById('session-title');
     const sessionError  = document.getElementById('session-error');
     const sessionCancel = document.getElementById('session-cancel');
     const sessionStart  = document.getElementById('session-start');
@@ -91,11 +90,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function openSessionDialog() {
-        sessionTitle.value = '';
         sessionError.textContent = '';
         updateSessionWarning();
         sessionDialog.showModal();
-        sessionTitle.focus();
+        window.SampleForm.open();
     }
 
     function updateSessionWarning() {
@@ -119,16 +117,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     sessionForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        const measurementTitle = sessionTitle.value.trim();
-        if (!measurementTitle) return;
+        const form = window.SampleForm.read();
+        if (form.error) {
+            sessionError.textContent = form.error;
+            document.getElementById(form.focus)?.focus();
+            return;
+        }
+        window.SampleForm.remember(form.cycles);
+        startMeasurement(form, message => { sessionError.textContent = message; });
+    });
 
+    // a test needs nothing filled in, it starts straight away
+    function startTest() {
+        startMeasurement(window.SampleForm.read(), message => {
+            statusLog.innerHTML = '<p class="stopped-text" style="color:var(--danger);"></p>';
+            statusLog.querySelector('p').textContent = message;
+        });
+    }
+
+    function startMeasurement(form, showError) {
+        const measurementTitle = form.title;
         if (preview.isDemo) {
             preview.saveSession({ running: true, title: measurementTitle, duration: Number(duration.value) });
+            window.Guide.start(form.mode, form.cycles);
             startUI(Number(duration.value), measurementTitle);
             return;
         }
 
         sessionStart.disabled = true;
+        btn.disabled = true;
         sessionError.textContent = '';
 
         Promise.all([syncRTC(), saveFileDuration()])
@@ -137,22 +154,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     measurement_title: measurementTitle,
-                    file_duration_minutes: Number(duration.value)
+                    file_duration_minutes: Number(duration.value),
+                    mode: form.mode,
+                    cycles: form.cycles
                 })
             }))
             .then(r => r.json())
             .then(res => {
                 if (res.status !== 'success') throw new Error(res.message || 'Start failed');
                 sessionDialog.close();
+                window.Guide.start(form.mode, form.cycles);
                 startUI(res.file_duration_minutes, res.measurement_title);
             })
-            .catch(e => {
-                sessionError.textContent = e.message;
-            })
+            .catch(e => showError(e.message))
             .finally(() => {
                 sessionStart.disabled = false;
+                btn.disabled = false;
             });
-    });
+    }
 
 
     function startUI(fileDurationMinutes = null, folderName = null) {
@@ -169,7 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (preview.isDemo) {
             statusLog.innerHTML = '<p class="running-text" style="color:var(--success);"></p>';
-            statusLog.querySelector('p').textContent = `Writing to ${activeFolderName}`;
+            statusLog.querySelector('p').textContent = 'Recording';
             return;
         }
 
@@ -182,8 +201,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         // file messages push the start messages out of the log tail
                         sensorsStarted = sensorsStarted || ['[S', 'Collecting data', '[OK] Sensor', '[FILE]'].some(text => res.logs.includes(text));
                         if (sensorsStarted) {
-                            const name = activeFolderName || 'measurements';
-                            statusLog.innerHTML = `<p class="running-text" style="color:var(--success);">Writing to ${name}</p>`;
+                            statusLog.innerHTML = '<p class="running-text" style="color:var(--success);">Recording</p>';
                         } else {
                             statusLog.innerHTML = `<p class="running-text" style="color:var(--neon-blue);">Initializing sensors...</p><pre class="debug-log" style="color:#ff6b6b">${res.logs}</pre>`;
                         }
@@ -207,14 +225,26 @@ document.addEventListener('DOMContentLoaded', () => {
         window.dispatchEvent(new CustomEvent('measurement-ui-change', { detail: { running: false } }));
     }
 
+    function stopMeasurement() {
+        if (preview.isDemo) preview.saveSession({ running: false });
+        else fetch('/api/stop-sensor', { method: 'POST' });
+        stopUI();
+    }
+
     btn.addEventListener('click', () => {
-        if (!isRunning) {
-            openSessionDialog();
-        } else {
-            if (preview.isDemo) preview.saveSession({ running: false });
-            else fetch('/api/stop-sensor', { method: 'POST' });
-            stopUI();
+        if (!isRunning && window.SampleForm.mode() === 'test') startTest();
+        else if (!isRunning) openSessionDialog();
+        else stopMeasurement();
+    });
+
+    // the last cycle ends the measurement
+    window.addEventListener('guide-finished', () => {
+        // the device stops on its own, the demo stops here
+        if (isRunning) {
+            if (preview.isDemo) stopMeasurement();
+            else stopUI();
         }
+        statusLog.innerHTML = '<p class="success-text">All cycles done. You can remove the sample.</p>';
     });
 
     // keep several open devices in sync

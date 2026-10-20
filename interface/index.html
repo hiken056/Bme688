@@ -38,8 +38,20 @@
 
                 <div class="acquisition-panel glass-panel">
                     <div class="duration-control">
-                        <label for="measurement-duration">File length</label>
-                        <select id="measurement-duration">
+                        <div class="mode-toggle" role="radiogroup" aria-label="Measurement type">
+                            <label><input type="radio" name="measure-mode" value="test"><span>Test</span></label>
+                            <label><input type="radio" name="measure-mode" value="collect" checked><span>Collect data</span></label>
+                        </div>
+                        <div id="cycle-control" class="cycle-control">
+                            <label id="cycle-label">Cycles</label>
+                            <div class="cycle-stepper" role="group" aria-labelledby="cycle-label">
+                                <button id="cycle-minus" type="button" aria-label="Fewer cycles">&minus;</button>
+                                <output id="cycle-count" aria-live="polite">2</output>
+                                <button id="cycle-plus" type="button" aria-label="More cycles">+</button>
+                            </div>
+                        </div>
+                        <span id="mode-hint"></span>
+                        <select id="measurement-duration" hidden>
                             <option value="1">1 minute</option>
                             <option value="2">2 minutes</option>
                             <option value="3">3 minutes</option>
@@ -51,7 +63,6 @@
                             <option value="25">25 minutes</option>
                             <option value="30" selected>30 minutes</option>
                         </select>
-                        <span>New files open automatically. Measurements continue until Stop.</span>
                     </div>
 
                     <button id="main-toggle-btn" class="massive-toggle start">
@@ -77,11 +88,22 @@
                         </div>
                         <a class="prediction-manage-button" href="classifier.html">Manage</a>
                     </div>
+                    <div id="phase-card" class="phase-card" hidden>
+                        <div class="phase-top">
+                            <span id="phase-cycle"></span>
+                            <span id="phase-total"></span>
+                        </div>
+                        <p id="phase-title" class="phase-title"></p>
+                        <p id="phase-detail" class="phase-detail"></p>
+                        <div id="phase-bar" class="phase-bar"><span id="phase-bar-fill"></span></div>
+                        <div class="phase-next">
+                            <span id="phase-next"></span>
+                            <span id="phase-next-time"></span>
+                        </div>
+                        <button id="phase-button" class="btn btn-outline phase-button" type="button" hidden></button>
+                    </div>
                     <div id="prediction-result" class="prediction-result" aria-live="polite" aria-atomic="true"></div>
-                    <details id="prediction-checks" class="prediction-checks" hidden>
-                        <summary><span id="prediction-checks-summary">Checks</span> <span class="classifier-chevron" aria-hidden="true"></span></summary>
-                        <ul id="prediction-checks-list"></ul>
-                    </details>
+                    
                     <div class="prediction-footer">
                         <span id="prediction-updated">No predictions yet</span>
                         <span id="prediction-window"></span>
@@ -106,21 +128,14 @@
 
     <dialog id="session-dialog" class="session-dialog">
         <form id="session-form" class="session-form">
-            <h3>New measurement</h3>
-            <p>Use the same title to group related runs.</p>
+            <h3 id="session-heading">New measurement</h3>
+            <p id="session-plan"></p>
             <div id="session-classifier-warning" class="session-classifier-warning" hidden>
                 <p id="session-classifier-warning-text"></p>
                 <button id="session-match-profiles" class="classifier-text-link" type="button">Match profiles first</button>
             </div>
-            <label for="session-title">Measurement title</label>
-            <input
-                id="session-title"
-                class="text-input"
-                type="text"
-                maxlength="64"
-                autocomplete="off"
-                required
-            >
+            <div id="session-cycles" class="session-cycles"></div>
+            <datalist id="known-objects"></datalist>
             <p id="session-error" class="session-error"></p>
             <div class="session-actions">
                 <button id="session-cancel" class="btn btn-outline" type="button">Cancel</button>
@@ -143,9 +158,19 @@
         </form>
     </dialog>
 
+    <div id="action-bar" class="action-bar" role="alert" hidden>
+        <div class="action-text">
+            <strong id="action-title"></strong>
+            <span id="action-detail"></span>
+        </div>
+        <button id="action-button" class="btn btn-primary action-button" type="button"></button>
+    </div>
+
     <script src="js/heater-profiles.js"></script>
     <script src="js/classifier-store.js"></script>
     <script src="js/prediction.js"></script>
+    <script src="js/sample-form.js"></script>
+    <script src="js/guide.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

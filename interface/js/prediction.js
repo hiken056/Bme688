@@ -3,9 +3,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const result = document.getElementById('prediction-result');
     const updated = document.getElementById('prediction-updated');
     const windowLabel = document.getElementById('prediction-window');
-    const checksBox = document.getElementById('prediction-checks');
-    const checksSummary = document.getElementById('prediction-checks-summary');
-    const checksList = document.getElementById('prediction-checks-list');
     const stateSelect = document.getElementById('prediction-demo-state');
     const matchDialog = document.getElementById('profile-match-dialog');
     const matchForm = document.getElementById('profile-match-form');
@@ -36,6 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
         collecting: ['Collecting data', 'Building a complete pattern across sensors and heater steps.'],
         analysing: ['Analysing', 'Comparing the latest pattern with the model.'],
         no_reference: ['No clean-air reference', 'The model has no training clean air for these heater profiles.'],
+        waiting_clean_air: ['Waiting for clean air', 'Predictions start after the warm-up and the clean air.'],
+        waiting_sample: ['Waiting for the sample', 'Predictions start 2 min after you tap Sample placed.'],
         incompatible: ['Profile mismatch', 'The selected model needs different heater profiles.', 'Review model', 'classifier.html'],
         checking: ['Checking profiles', 'Reading the sensor configuration before making predictions.'],
         loading: ['Loading models', 'Reading the models stored on this device.'],
@@ -158,26 +157,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }).join('')}
             </div>`}`;
         updated.textContent = `Updated ${clock(prediction.time)}`;
-    }
-
-    function renderChecks(checks) {
-        if (!checks?.length || preview.isDemo) {
-            checksBox.hidden = true;
-            return;
-        }
-        const failed = checks.filter(item => !item.ok).length;
-        const warned = checks.filter(item => item.ok && item.warn).length;
-        checksBox.hidden = false;
-        checksBox.dataset.state = failed ? 'fail' : warned ? 'warn' : 'ok';
-        const plural = count => count === 1 ? 'check' : 'checks';
-        checksSummary.textContent = failed ? `${failed} ${plural(failed)} not passed` : warned ? `${warned} ${plural(warned)} with notes`
-            : `All ${checks.length} checks passed`;
-        checksList.innerHTML = checks.map(item => {
-            const state = !item.ok ? 'fail' : item.warn ? 'warn' : 'ok';
-            const mark = state === 'ok' ? '✓' : state === 'warn' ? '!' : '✕';
-            return `<li class="is-${state}"><span class="prediction-check-mark" aria-hidden="true">${mark}</span>
-                <span><strong>${preview.escapeHtml(item.label)}</strong>${item.detail ? `<span>${preview.escapeHtml(item.detail)}</span>` : ''}</span></li>`;
-        }).join('');
     }
 
     async function request(url, options = {}) {
@@ -332,13 +311,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderMismatch(model, { issues: s.issues || [] });
                 break;
             case 'idle':
-                renderState('idle', model);
+                // the device needs a moment to notice a new measurement
+                renderState(measuring ? 'starting' : 'idle', model);
                 break;
             case 'starting':
                 renderState('starting', model);
                 break;
             case 'no_reference':
                 renderState('no_reference', model, s.message);
+                break;
+            case 'waiting_clean_air':
+            case 'waiting_sample':
+                renderState(s.state, model);
                 break;
             case 'collecting': {
                 const total = model.window_seconds || 120;
@@ -362,7 +346,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function demoPrediction(model, unknown) {
         const labels = model.classes.slice(0, 4);
-        const preferred = labels.find(label => label.toLowerCase() === 'food') || labels[0];
+        // the demo follows what is in front of the sensors
+        const wanted = { clean_air: 'clean air', spicy: 'spicy', bad_smell: 'bad smell' }[window.Guide?.demoStage()?.sample];
+        const preferred = labels.find(label => label.toLowerCase() === wanted) || labels[0];
         const ranked = [preferred, ...labels.filter(label => label !== preferred)];
         const scores = unknown ? [38, 29, 20, 13] : [86, 8, 4, 2];
         // keep demo probabilities consistent when a model has fewer classes
@@ -387,8 +373,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const model = preview.activeModel();
         const loading = preview.modelsStatus();
         document.getElementById('prediction-model-name').textContent = model ? `${model.name} v${model.version}` : 'No model selected';
-        windowLabel.textContent = !model ? '' : live?.reference?.averaged ? 'Uses average reference air' : 'Uses reference air';
-        renderChecks(!preview.isDemo && model && live?.model?.id === model.id ? live.checks : null);
+        // which clean air the predictions are compared with
+        const stage = preview.isDemo ? window.Guide?.demoStage() : null;
+        const guided = stage || (live?.reference?.source === 'cycle' ? live.reference : null);
+        const testing = stage ? stage.mode === 'test' : live?.reference?.log?.startsWith('clean_air');
+        windowLabel.textContent = !model ? ''
+            : guided?.cycle ? (testing ? 'Uses the latest clean air' : `Uses clean air of cycle ${guided.cycle}`)
+            : live?.reference?.averaged ? 'Uses average reference air' : 'Uses reference air';
         if (!model) {
             if (loading.status === 'loading') renderState('loading', null);
             else if (loading.status === 'unavailable') renderState('disconnected', null, loading.message);
@@ -400,6 +391,14 @@ document.addEventListener('DOMContentLoaded', () => {
             renderState('idle', model);
         } else if (!preview.isDemo) {
             renderLive(model);
+        } else if (stage) {
+            // the demo follows the cycles: nothing before the clean air, then one window of data
+            if (stage.key.startsWith('waiting')) renderState(stage.key, model);
+            else if (stage.key === 'collecting') {
+                renderState('collecting', model, null, {
+                    progress: (1 - stage.left_s / 120) * 100, note: `First prediction in about ${duration(stage.left_s)}`
+                });
+            } else renderResult(demoPrediction(model, false), model);
         } else if (demoState === 'ready' || demoState === 'unknown') {
             renderResult(demoPrediction(model, demoState === 'unknown'), model);
         } else {
@@ -440,6 +439,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!measuring || !demoStartedAt) return;
             const elapsed = Date.now() - demoStartedAt;
             const nextState = elapsed < 4000 ? 'collecting' : 'ready';
+            if (window.Guide?.demoStage()) {
+                render();
+                return;
+            }
             if (nextState === demoState) return;
             demoState = nextState;
             stateSelect.value = demoState;
@@ -449,7 +452,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('classifier-preview-change', render);
     window.addEventListener('classifier-config-change', render);
     window.addEventListener('storage', event => {
-        if (event.key === 'bmeClassifierPreviewV1' || event.key === null) render();
+        if (event.key === 'bmeClassifierPreviewV2' || event.key === null) render();
     });
     render();
     preview.refreshConfiguration();

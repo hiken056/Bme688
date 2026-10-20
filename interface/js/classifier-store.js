@@ -1,6 +1,6 @@
 // models live on the device; the demo keeps them in the browser
 window.ClassifierPreview = (() => {
-    const storageKey = 'bmeClassifierPreviewV1';
+    const storageKey = 'bmeClassifierPreviewV2';
     const sessionKey = 'bmeAcquisitionPreviewV1';
     const configKey = 'bmeClassifierConfigPreviewV1';
     const params = new URLSearchParams(window.location.search);
@@ -12,61 +12,21 @@ window.ClassifierPreview = (() => {
         return [index + 1, window.HeaterProfiles.definition(preset)];
     }));
     const demoModels = [{
-        id: 'demo-odor-groups',
-        name: 'Odor groups',
-        version: '1.0',
-        description: 'Groups sensor responses into broad smell categories.',
-        classes: ['Clean air', 'Food', 'Trash', 'Sewage', 'Chemical'],
+        id: 'demo-smell-classifier',
+        name: 'Clean air / spicy / bad smell',
+        version: '0.2',
+        description: 'Tells clean air, spicy and bad smell apart.',
+        classes: ['Clean air', 'Spicy', 'Bad smell'],
         profiles: ['hp_301_basic', 'hp_354_standard', 'hp_411_levels', 'hp_501_sweep'],
         sensors: [1, 2, 3, 4, 5, 6, 7, 8],
         sensor_profiles: demoRequirements,
-        window_seconds: 60,
-        warmup_seconds: 120,
-        prediction_interval_seconds: 5,
-        size_bytes: 786432,
-        filename: 'odor-groups.json',
-        demo: true
-    }, {
-        id: 'demo-food-signatures',
-        name: 'Food signatures',
-        version: '1.1',
-        description: 'Compares heater-step patterns for common food aromas.',
-        classes: ['Coffee', 'Banana', 'Apple', 'Citrus', 'Onion'],
-        profiles: ['hp_301_basic', 'hp_354_standard', 'hp_411_levels', 'hp_501_sweep'],
-        sensors: [1, 2, 3, 4, 5, 6, 7, 8],
-        sensor_profiles: demoRequirements,
-        window_seconds: 30,
-        warmup_seconds: 120,
-        prediction_interval_seconds: 5,
-        size_bytes: 1179648,
-        filename: 'food-signatures.json',
+        window_seconds: 120,
+        warmup_seconds: 0,
+        prediction_interval_seconds: 30,
+        size_bytes: 11129,
+        filename: 'smell_classifier_v0.2.json',
         demo: true
     }];
-    const extraDemoModels = [
-        ['waste-sorting', 'Waste sorting', 'Compares common waste and recycling smells.', ['Clean air', 'Food waste', 'Plastic', 'Paper']],
-        ['fruit-ripeness', 'Fruit ripeness', 'Distinguishes fresh, ripe and overripe fruit aromas.', ['Fresh', 'Ripe', 'Overripe']],
-        ['coffee-roasts', 'Coffee roasts', 'Compares aroma patterns from different coffee roasts.', ['Light roast', 'Medium roast', 'Dark roast']],
-        ['urban-air', 'Urban air', 'Groups background air and common urban smell patterns.', ['Background', 'Traffic', 'Smoke', 'Waste']],
-        ['sewage-detection', 'Sewage detection', 'Compares sewage-like responses with other background smells.', ['Background', 'Sewage', 'Food waste']],
-        ['household-chemicals', 'Household chemicals', 'Separates common cleaning and solvent aromas.', ['Clean air', 'Detergent', 'Alcohol', 'Solvent']],
-        ['food-freshness', 'Food freshness', 'Compares fresh and spoiled food aroma patterns.', ['Fresh food', 'Spoiled food', 'Background']],
-        ['compost-monitoring', 'Compost monitoring', 'Groups aroma patterns from composting materials.', ['Background', 'Fresh compost', 'Active compost', 'Mature compost']],
-        ['smoke-signatures', 'Smoke signatures', 'Compares different smoke and heated-material patterns.', ['Clean air', 'Wood smoke', 'Cooking smoke', 'Plastic smoke']],
-        ['field-odor-classification', 'Field odor classification', 'Compares broad smell categories during field measurements.', ['Background', 'Food', 'Trash', 'Sewage', 'Smoke', 'Chemical']]
-    ];
-    extraDemoModels.forEach(([id, name, description, classes], index) => {
-        demoModels.push({
-            ...demoModels[0],
-            id: `demo-${id}`,
-            name,
-            description,
-            classes,
-            version: `1.${index % 3}`,
-            window_seconds: index % 2 ? 30 : 60,
-            size_bytes: (512 + index * 96) * 1024,
-            filename: `${id}.json`
-        });
-    });
 
     // models read from the device
     let deviceModels = { status: 'loading', models: [], activeId: null, message: '' };

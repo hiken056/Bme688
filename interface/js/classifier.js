@@ -310,7 +310,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.addEventListener('storage', event => {
-        if (event.key === 'bmeClassifierPreviewV1' || event.key === null) render();
+        if (event.key === 'bmeClassifierPreviewV2' || event.key === null) render();
     });
     window.addEventListener('classifier-preview-change', render);
     window.addEventListener('focus', () => preview.refreshModels());

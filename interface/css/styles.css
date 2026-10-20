@@ -16,6 +16,8 @@
     --font-ui:       'Outfit', sans-serif;
     --font-data:     'Inter', sans-serif;
     --radius:        14px;
+    --signal:        #3ed2ff;   /* add or remove the sample */
+    --signal-glow:   rgba(62,210,255,0.22);
 }
 
 /* base */
@@ -279,6 +281,129 @@ nav a.active {
 }
 .session-actions .btn {
     min-width: 100px;
+}
+
+/* cycles: stepper on the page, one card per cycle in the dialog */
+.cycle-stepper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.9rem;
+}
+.cycle-stepper button {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--glass-border);
+    background: rgba(0,0,0,0.22);
+    color: var(--text);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color 0.2s, opacity 0.2s;
+}
+.cycle-stepper button:hover:not(:disabled) { border-color: var(--primary); }
+.cycle-stepper button:disabled { cursor: default; opacity: 0.35; }
+.cycle-stepper output {
+    min-width: 2ch;
+    font-family: var(--font-ui);
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.session-cycles {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+}
+.cycle-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    min-width: 0;
+    padding: 0.9rem 1rem 1rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.02);
+}
+.cycle-card legend {
+    padding: 0 0.4rem;
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+}
+.session-form .cycle-card label { margin-top: 0; }
+.cycle-card label span {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    opacity: 0.8;
+}
+.cycle-card .text-input { padding: 0.6rem 0.8rem; font-size: 0.9rem; }
+/* suggestions only, no dropdown arrow */
+.cycle-card input[list]::-webkit-calendar-picker-indicator { display: none !important; }
+
+.cycle-classes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.4rem;
+}
+.session-form .cycle-class {
+    position: relative;
+    margin: 0;
+    font-size: 0.8rem;
+    letter-spacing: 0;
+    text-transform: none;
+    cursor: pointer;
+}
+.cycle-class input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.cycle-class span {
+    display: block;
+    padding: 0.5rem 0.3rem;
+    text-align: center;
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    background: rgba(0,0,0,0.22);
+    color: var(--muted);
+    transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+.cycle-class:hover span { border-color: var(--primary); }
+.cycle-class input:checked + span {
+    border-color: var(--primary);
+    background: rgba(108,92,231,0.22);
+    color: var(--text);
+}
+.cycle-class input:focus-visible + span { outline: 2px solid var(--primary-h); outline-offset: 2px; }
+
+.cycle-row {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr;
+    gap: 0.6rem;
+}
+.cycle-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 0;
+}
+.cycle-unit {
+    position: relative;
+}
+.cycle-unit .text-input { padding-right: 2.4rem; }
+.cycle-unit span {
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    font-size: 0.82rem;
+    pointer-events: none;
 }
 
 .mini-sensor-grid {
@@ -1680,3 +1805,168 @@ select:focus { border-color: var(--primary); }
         padding: 0.48rem 0.6rem;
     }
 }
+
+/* current phase in the live panel */
+.phase-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin-top: 1rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    background: rgba(0,0,0,0.18);
+}
+.phase-top, .phase-next {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    color: var(--muted);
+    font-size: 0.78rem;
+}
+.phase-title {
+    font-family: var(--font-ui);
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text);
+}
+.phase-detail {
+    color: var(--muted);
+    font-size: 0.86rem;
+}
+.phase-bar {
+    height: 6px;
+    margin-top: 0.3rem;
+    border-radius: 99px;
+    background: rgba(255,255,255,0.07);
+    overflow: hidden;
+}
+.phase-bar span {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    background: var(--primary);
+    transition: width 0.9s linear;
+}
+.phase-card[data-phase="sample"] .phase-bar span { background: var(--signal); }
+.phase-card[data-phase="warmup"] .phase-bar span,
+.phase-card[data-phase="settle"] .phase-bar span { background: var(--muted); }
+.phase-card[data-phase="add"],
+.phase-card[data-phase="remove"] {
+    border-color: var(--signal);
+    animation: phase-pulse 1.6s ease-in-out infinite;
+}
+.phase-card[data-phase="done"] { border-color: var(--success); }
+.phase-card[hidden], .phase-card [hidden] { display: none; }
+
+/* bar at the bottom when the person has to do something */
+.action-bar {
+    position: fixed;
+    left: 50%;
+    bottom: 1rem;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    width: min(560px, calc(100% - 2rem));
+    padding: 1rem 1.1rem;
+    transform: translateX(-50%);
+    color: var(--text);
+    background: #1d1a2b;
+    border: 2px solid var(--signal);
+    border-radius: var(--radius);
+    box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+    animation: phase-pulse 1.6s ease-in-out infinite;
+}
+.action-bar[hidden] { display: none; }
+.action-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    flex: 1;
+    min-width: 0;
+}
+.action-text strong {
+    font-family: var(--font-ui);
+    font-size: 1.1rem;
+}
+.action-text span {
+    color: var(--muted);
+    font-size: 0.86rem;
+}
+.action-button {
+    flex-shrink: 0;
+    min-height: 52px;
+    padding: 0 1.4rem;
+    font-size: 1rem;
+}
+@keyframes phase-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 transparent, 0 18px 60px rgba(0,0,0,0.45); }
+    50%      { box-shadow: 0 0 0 6px var(--signal-glow), 0 18px 60px rgba(0,0,0,0.45); }
+}
+@media (max-width: 720px) {
+    .action-bar { flex-direction: column; align-items: stretch; text-align: center; }
+    .action-button { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .phase-card, .action-bar { animation: none; }
+}
+
+/* no arrows on number boxes */
+.cycle-unit input { -moz-appearance: textfield; }
+.cycle-unit input::-webkit-outer-spin-button,
+.cycle-unit input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* test or collect data, above the cycles */
+.mode-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+    padding: 3px;
+    margin-bottom: 0.4rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 99px;
+    background: rgba(0,0,0,0.22);
+}
+.mode-toggle label {
+    position: relative;
+    cursor: pointer;
+}
+.mode-toggle input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.mode-toggle span {
+    display: block;
+    padding: 0.42rem 0.6rem;
+    border-radius: 99px;
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transition: background 0.2s, color 0.2s;
+}
+.mode-toggle label:hover span { color: var(--text); }
+.mode-toggle input:checked + span {
+    background: var(--primary);
+    color: #fff;
+}
+.mode-toggle input:focus-visible + span { outline: 2px solid var(--primary-h); outline-offset: 2px; }
+.mode-toggle input:disabled + span { cursor: default; opacity: 0.55; }
+.mode-toggle input:disabled:checked + span { opacity: 0.8; }
+.cycle-control {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+.cycle-control[hidden] { display: none; }
+.phase-button {
+    align-self: flex-start;
+    margin-top: 0.35rem;
+    padding: 0.45rem 0.9rem;
+    font-size: 0.82rem;
+}
+.phase-card [hidden].phase-button { display: none; }
+.duration-control .mode-toggle label { text-transform: none; letter-spacing: 0; color: inherit; }
