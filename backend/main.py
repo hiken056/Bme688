@@ -19,8 +19,10 @@ import zipfile
 
 try:
     import classifier
+    import guide as guided
 except ImportError:  # tests import backend.main
     from backend import classifier
+    from backend import guide as guided
 
 app = FastAPI()
 
@@ -40,8 +42,10 @@ CONFIG_PATH = Path(os.environ.get("BME_CONFIG_PATH", "/var/lib/bme688/config.jso
 LEGACY_CONFIG_PATH = Path("/tmp/bme_config.json")
 # models and clean air live next to the config
 STATE_DIR = Path(os.environ.get("BME_STATE_DIR", CONFIG_PATH.parent))
-# folder of the running measurement
-SESSION_PATH = Path(os.environ.get("BME_SESSION_PATH", "/tmp/bme_session.json"))
+# the running measurement, kept over a reboot to mark its recording as interrupted
+SESSION_PATH = Path(os.environ.get("BME_SESSION_PATH", STATE_DIR / "session.json"))
+# test or collect, and how many cycles, the same on every device
+GUIDE_SETTINGS_PATH = STATE_DIR / "guide_settings.json"
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,9 +69,27 @@ class FileDurationRequest(BaseModel):
     file_duration_minutes: Literal[1, 2, 3, 4, 5, 10, 15, 20, 25, 30] = DEFAULT_FILE_DURATION_MINUTES
 
 
+class Cycle(BaseModel):
+    object: str
+    sample_class: Literal["clean_air", "spicy", "bad_smell"]
+    distance_cm: float
+    notes: str = ""
+
+
 class StartSensorRequest(BaseModel):
     measurement_title: str
     file_duration_minutes: Optional[Literal[1, 2, 3, 4, 5, 10, 15, 20, 25, 30]] = None
+    mode: Optional[Literal["collect", "test"]] = None
+    cycles: Optional[list[Cycle]] = None
+
+
+class GuideTap(BaseModel):
+    index: int = 0
+
+
+class GuideSettings(BaseModel):
+    mode: Literal["collect", "test"] = "collect"
+    cycles: int = 2
 
 
 class DownloadFilesRequest(BaseModel):
@@ -502,10 +524,13 @@ def start_sensor(request: StartSensorRequest):
 
         sensor_file_started_at = time.monotonic()
         sensor_file_duration_minutes = file_duration_minutes
-        classifier.write_json_atomic(SESSION_PATH, {
-            "title_dir": str(measurement_dir),
-            "started_at": time.time(),
-        })
+        session = {"title_dir": str(measurement_dir), "started_at": time.time()}
+        if request.mode == "test":
+            session["guide"] = guided.new_guide("test", [])
+        elif request.mode == "collect" and request.cycles:
+            session["guide"] = guided.new_guide("collect", [cycle.dict() for cycle in request.cycles])
+        classifier.write_json_atomic(SESSION_PATH, session)
+        predictor.guide_finished = False
         sensor_measurement_title = measurement_title
         return {
             "status": "success",
@@ -578,7 +603,8 @@ def read_config_or_none():
 
 
 predictor = classifier.Predictor(
-    STATE_DIR, MEASUREMENTS_DIR, SESSION_PATH, sensor_is_running, read_config_or_none
+    STATE_DIR, MEASUREMENTS_DIR, SESSION_PATH, sensor_is_running, read_config_or_none,
+    on_guide_done=lambda: stop_sensor()
 )
 
 
@@ -653,6 +679,34 @@ def delete_model(model_id: str):
 @app.get("/api/prediction")
 def get_prediction():
     return predictor.snapshot()
+
+
+# guided cycles
+@app.get("/api/guide")
+def get_guide():
+    return predictor.guide_state()
+
+
+@app.get("/api/guide-settings")
+def get_guide_settings():
+    saved = classifier.read_json(GUIDE_SETTINGS_PATH, {}) or {}
+    return {"status": "success", **GuideSettings(**saved).dict()}
+
+
+@app.post("/api/guide-settings")
+def save_guide_settings(settings: GuideSettings):
+    if not 1 <= settings.cycles <= 6:
+        return api_error("Choose between 1 and 6 cycles.")
+    classifier.write_json_atomic(GUIDE_SETTINGS_PATH, settings.dict())
+    return {"status": "success", **settings.dict()}
+
+
+@app.post("/api/guide/{action}")
+def guide_tap(action: Literal["placed", "removed", "reclean"], tap: GuideTap):
+    problem = predictor.guide_record(action, tap.index)
+    if problem:
+        return api_error(problem, 409)
+    return predictor.guide_state()
 
 
 app.mount("/static", StaticFiles(directory=INTERFACE_DIR, html=True), name="static")
