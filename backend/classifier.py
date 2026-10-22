@@ -11,6 +11,11 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 
+try:
+    import guide as guided
+except ImportError:
+    from backend import guide as guided
+
 MAX_MODEL_BYTES = 5 * 1024 * 1024
 SUPPORTED_TYPES = {"multinomial_logistic_regression"}
 FEATURE_RE = re.compile(r"^(?P<profile>.+)_shape_s(?P<step>\d)$")
@@ -616,7 +621,8 @@ def training_reference(model, mapping, board):
 # live predictor
 
 class Predictor:
-    def __init__(self, state_dir: Path, measurements_dir: Path, session_path: Path, is_running, read_config):
+    def __init__(self, state_dir: Path, measurements_dir: Path, session_path: Path, is_running, read_config,
+                 on_guide_done=None):
         self.state_dir = state_dir
         self.store = ModelStore(state_dir)
         self.data = LiveData(measurements_dir, session_path)
@@ -626,6 +632,11 @@ class Predictor:
         self.result = None
         self.result_checks = []        # checks of the last prediction
         self.measured = None           # clean air from the running measurement
+        self.cycle_ref = None          # clean air of the current cycle
+        self.on_guide_done = on_guide_done
+        self.guide_finished = False    # the last guided measurement ended on its own
+        self.cycles_written = None
+        self.data_session = None       # the measurement the loaded data belongs to
         self.status_cache = None
         self.last_prediction_t = None
         self.thread = None
@@ -635,6 +646,7 @@ class Predictor:
     def start(self):
         if self.thread:
             return
+        self._recover()
         self.thread = threading.Thread(target=self._loop, name="smell-predictor", daemon=True)
         self.thread.start()
 
@@ -646,6 +658,26 @@ class Predictor:
                 with self.lock:
                     self.status_cache = {"state": "error", "message": f"Classifier error: {error}"}
             self.stop_event.wait(LOOP_SECONDS)
+
+    # after a reboot the sensors are off: keep what was recorded, marked as interrupted
+    def _recover(self):
+        session = read_json(self.session_path, {}) or {}
+        if not session or self.is_running():
+            return
+        guide = session.get("guide")
+        if guide:
+            self.data.update()
+            run = self.data.newest_run()
+            if run:
+                guide["interrupted"] = True
+                try:
+                    write_json_atomic(run / "cycles.json", guide)
+                except OSError:
+                    pass
+        try:
+            self.session_path.unlink()
+        except OSError:
+            pass
 
     def session_key(self):
         session = read_json(self.session_path, {}) or {}
@@ -662,6 +694,9 @@ class Predictor:
             return
         self.data.clip = model["clip_ohm"] if model else DEFAULT_CLIP_OHM
         self.data.update()
+        self.data_session = self.session_key()
+        if self._guide_tick(now_ms):
+            return
         status = self._status(model, running=True, now_ms=now_ms)
         if status.get("due"):
             self._predict(model, status)
@@ -706,7 +741,14 @@ class Predictor:
             status.update(state="incompatible", message="The heater profiles don't match the model.", issues=issues)
             return status
         refs, reference = training_reference(model, mapping, board_name())
-        if running:
+        session = (read_json(self.session_path, {}) or {}) if running else {}
+        guide = session.get("guide")
+        cycle_ref = self._cycle_reference(guide, session) if guide else None
+        if cycle_ref:
+            # sensors without a value keep the training value
+            refs = {s: cycle_ref["refs"].get(s, (refs or {}).get(s)) for sensors in mapping.values() for s in sensors}
+            reference = cycle_ref["reference"]
+        elif running and not guide:
             measured = self._measured_reference()
             if measured:
                 # sensors without a measured value keep the training value
@@ -738,8 +780,17 @@ class Predictor:
         if refs is None:
             status.update(state="no_reference", message="The model has no training clean air for these heater profiles.")
             return status
-        # first prediction after one full window of data
-        window_ready_at = first_t + model["window_seconds"] * 1000
+        # guided: collecting predicts only with the sample in place, testing after the clean air
+        start = first_t
+        if guide:
+            g_start, g_now = self._times(session)
+            allowed = guided.prediction_start(guide, g_start, g_now)
+            if allowed is None or not cycle_ref:
+                waiting = "waiting_sample" if cycle_ref and guide["mode"] == "collect" else "waiting_clean_air"
+                status.update(state=waiting, message="")
+                return status
+            start = allowed
+        window_ready_at = start + model["window_seconds"] * 1000
         if last_t < window_ready_at:
             status.update(state="collecting", message="Collecting the first analysis window.",
                           collecting_remaining_s=round((window_ready_at - last_t) / 1000))
@@ -748,8 +799,109 @@ class Predictor:
         interval_ms = model["prediction_interval_seconds"] * 1000
         due = self.result is None or self.last_prediction_t is None or last_t - self.last_prediction_t >= interval_ms
         status.update(state="ready", message="", due=due,
-                      _ctx={"mapping": mapping, "refs": refs, "setup": setup, "reference": reference})
+                      _ctx={"mapping": mapping, "refs": refs, "setup": setup, "reference": reference, "guide": guide})
         return status
+
+    # sensor time of the measurement: start and now
+    def _times(self, session):
+        started = int((session.get("started_at") or time.time()) * 1000)
+        if self.data_session != self.session_key() or not self.data.first_t:
+            # data of this measurement not loaded yet
+            return started, max(int(time.time() * 1000), started)
+        return self.data.first_t, max(self.data.last_t() or self.data.first_t, self.data.first_t)
+
+    # guided cycles for the interface
+    def guide_state(self):
+        session = read_json(self.session_path, {}) or {}
+        guide = session.get("guide")
+        if not guide or not self.is_running():
+            return {"status": "success", "active": False, "finished": self.guide_finished}
+        start, now = self._times(session)
+        current = guided.phase(guide, start, now)
+        return {"status": "success", "active": True, "finished": False, "mode": guide["mode"],
+                "cycles": guide["cycles"], "phase": current, "now_ms": now, "start_ms": start,
+                "left_ms": guided.left_ms(guide, current, now), "warm": guide["warm"],
+                "warm_limit": guided.WARM_LIMIT, "warm_checks": guided.WARM_CHECKS}
+
+    # a tap from the interface: sample placed, sample removed or new clean air
+    def guide_record(self, action, index):
+        session = read_json(self.session_path, {}) or {}
+        guide = session.get("guide")
+        if not guide or not self.is_running():
+            return "No guided measurement is running."
+        start, now = self._times(session)
+        problem = guided.record(guide, start, now, action, index)
+        if problem:
+            return problem
+        write_json_atomic(self.session_path, session)
+        self._write_cycles(guide)
+        return None
+
+    def _write_cycles(self, guide):
+        run = self.data.newest_run()
+        if not run or guide == self.cycles_written:
+            return
+        try:
+            write_json_atomic(run / "cycles.json", guide)
+            self.cycles_written = guide
+        except OSError:
+            pass
+
+    # keeps cycles.json next to the recording and stops after the last sample
+    def _guide_tick(self, now_ms):
+        session = read_json(self.session_path, {}) or {}
+        guide = session.get("guide")
+        if not guide:
+            return False
+        self.guide_finished = False
+        start, now = self._times(session)
+        if self.data_session == self.session_key() and guided.warm_update(guide, start, now, self.data.cycles_by_sensor()):
+            write_json_atomic(self.session_path, session)
+        if guide["mode"] == "test" or guided.phase(guide, start, now)["key"] != "done":
+            self._write_cycles(guide)
+            return False
+        self.guide_finished = True
+        if guide.get("finished"):
+            return True
+        guide["finished"] = True
+        write_json_atomic(self.session_path, session)
+        self._write_cycles(guide)
+        if self.on_guide_done:
+            self.on_guide_done()
+        with self.lock:
+            self.status_cache = self._status(self.store.active(), running=False)
+        return True
+
+    # clean air of the newest cycle whose clean-air phase is over
+    def _cycle_reference(self, guide, session):
+        start, now = self._times(session)
+        done = [w for w in guided.clean_windows(guide) if w[2] <= now]
+        if not done:
+            return None
+        index, low, high = done[-1]
+        key = (self.session_key(), index)
+        if self.cycle_ref and self.cycle_ref["key"] == key:
+            return self.cycle_ref
+        refs = {}
+        for sensor, items in self.data.cycles_by_sensor().items():
+            inside = [c for c in items if low <= c[0] < high]
+            if len(inside) >= 3:
+                refs[sensor] = [median([c[1][i] for c in inside]) for i in range(10)]
+        if not refs:
+            return None
+        name = "clean air" if guide["mode"] == "test" else "cycle"
+        reference = {"source": "cycle", "board": None, "boards": [], "averaged": False, "log": f"{name.replace(' ', '_')}{index + 1}",
+                     "cycle": index + 1, "recorded_at": iso(high), "label": f"Clean air {index + 1}"}
+        self.cycle_ref = {"key": key, "refs": refs, "reference": reference, "ready_at": high}
+        run = self.data.newest_run()
+        if run:
+            try:
+                write_json_atomic(run / f"reference_cycle{index + 1}.json", {
+                    "cycle": index + 1, "from": iso(low), "to": iso(high),
+                    "ln_r0": {str(sensor): values for sensor, values in refs.items()}})
+            except OSError:
+                pass
+        return self.cycle_ref
 
     # clean air from minutes 10-15 of the running measurement, taken once per measurement
     def _measured_reference(self):
@@ -805,6 +957,9 @@ class Predictor:
             for sensor in sensors:
                 if sensor in refs and not any(t_end - window * 1000 < c[0] <= t_end for c in cycles.get(sensor, [])):
                     notes.append(f"Sensor {sensor} sent no complete cycles in this window.")
+        guide = ctx.get("guide")
+        if guide and guide["warm"].get("capped"):
+            notes.append("The sensors were still settling when the 20 min warm-up limit was reached.")
         out = classify(model, values)
         missing_ok = out["missing"] <= MAX_MISSING_FRACTION * len(model["features"])
         status["checks"].append({"id": "window", "ok": not problems and missing_ok, "warn": bool(notes),
@@ -840,6 +995,7 @@ class Predictor:
             "t_ms": t_end, "time": iso(t_end), "window_seconds": window,
             "missing_features": out["missing"], "unusual_features": out["unusual"], "max_z": round(out["max_z"], 2),
             "reference": ctx["reference"]["log"], "warnings": list(status["warnings"]),
+            "expected": guided.expected(ctx["guide"], t_end) if ctx.get("guide") else {},
             "message": status.get("message", ""),
         }
         self._log(model, self.result)
@@ -855,13 +1011,17 @@ class Predictor:
             with path.open("a", encoding="utf-8") as handle:
                 if new:
                     handle.write("Timestamp_ms,Time,Model,Version,State,Prediction,Confidence,"
-                                 + ",".join(f"P_{c}" for c in classes) + ",Reference,Missing_values,Unusual_values,Warnings\n")
+                                 + ",".join(f"P_{c}" for c in classes) + ",Reference,Missing_values,Unusual_values,Warnings,"
+                                 + "Sample,Expected\n")
                 probs = {p["class"]: p["p"] for p in result["probabilities"]}
                 warnings = " | ".join(result["warnings"]).replace('"', "'")
+                expected = result.get("expected") or {}
+                sample = str(expected.get("object", "")).replace('"', "'")
                 handle.write(f"{result['t_ms']},{result['time']},\"{model['name']}\",{model['version']},{result['state']},"
                              f"{result['label'] or ''},{result['confidence']:.4f},"
                              + ",".join(f"{probs[c]:.4f}" for c in classes)
-                             + f",{result['reference']},{result['missing_features']},{result['unusual_features']},\"{warnings}\"\n")
+                             + f",{result['reference']},{result['missing_features']},{result['unusual_features']},\"{warnings}\""
+                             + f",\"{sample}\",{expected.get('sample_class') or ''}\n")
         except OSError:
             pass
 

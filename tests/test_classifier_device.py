@@ -201,6 +201,132 @@ class PredictionStates(DeviceTestCase):
         self.predictor.data.first_t = None
         self.assertNotEqual(self.predictor.measured["key"], self.predictor.session_key())
 
+    def start_guided(self, mode, cycles=()):
+        classifier.write_json_atomic(self.session, {"title_dir": str(self.run_dir.parent), "started_at": T0 / 1000,
+                                                    "guide": classifier.guided.new_guide(mode, list(cycles))})
+
+    def measure(self, minutes, shift=0.0, drift=0.0):
+        # the device checks every few seconds, here every half minute
+        status = None
+        for _ in range(round(minutes * 2)):
+            self.write(0.5, shift=shift, drift=drift)
+            status = self.tick()
+        return status
+
+    def phase(self):
+        return self.predictor.guide_state()["phase"]["key"]
+
+    def test_collect_predicts_only_with_the_sample_in_place(self):
+        cycles = [{"object": "Scortisoara", "sample_class": "spicy", "distance_cm": 5, "notes": ""},
+                  {"object": "Sosete", "sample_class": "bad_smell", "distance_cm": 10, "notes": ""}]
+        self.start_guided("collect", cycles)
+        done = []
+        self.predictor.on_guide_done = lambda: done.append(True)
+
+        # steady sensors are warm after 3 min of data and 3 checks
+        self.assertEqual(self.measure(3.5, shift=0.3)["state"], "waiting_clean_air")
+        self.assertEqual(self.phase(), "warmup")
+        self.measure(1, shift=0.3)
+        self.assertEqual(self.phase(), "clean")
+
+        # clean air done: still no prediction until the sample is placed
+        status = self.measure(3, shift=0.3)
+        self.assertEqual(self.phase(), "add")
+        self.assertEqual(status["state"], "waiting_sample")
+        self.measure(2, shift=0.3)
+        self.assertIsNone(self.predictor.result)
+
+        # taps at the wrong moment are refused
+        self.assertIsNotNone(self.predictor.guide_record("removed", 0))
+        self.assertIsNone(self.predictor.guide_record("placed", 0))
+        self.assertIsNotNone(self.predictor.guide_record("placed", 0))
+
+        # one window after the tap, compared with the clean air of cycle 1
+        self.assertEqual(self.measure(1.5, shift=0.6)["state"], "collecting")
+        status = self.measure(1, shift=0.6)
+        self.assertEqual(status["reference"]["log"], "cycle1")
+        self.assertEqual(status["result"]["label"], "smell")
+        self.assertTrue(status["result"]["t_ms"] - 120000 >= self.predictor.guide_state()["phase"]["start_ms"])
+        self.assertTrue(self.run_dir.joinpath("predictions.csv").read_text().splitlines()[-1].endswith(',"Scortisoara",spicy'))
+        self.measure(7.5, shift=0.6)
+        self.assertEqual(self.phase(), "remove")
+        self.assertIsNone(self.predictor.guide_record("removed", 0))
+
+        # second cycle: airing out and new clean air, no prediction until the next tap
+        status = self.measure(6.5, shift=0.3)
+        self.assertEqual(self.phase(), "add")
+        self.assertEqual(status["state"], "waiting_sample")
+        self.assertEqual(self.predictor.cycle_ref["reference"]["log"], "cycle2")
+        self.assertIsNone(self.predictor.guide_record("placed", 1))
+        self.measure(10.5, shift=0.3)
+        self.assertEqual(done, [True])
+        saved = json.loads((self.run_dir / "cycles.json").read_text())
+        self.assertTrue(saved["finished"])
+        self.assertEqual(len(saved["placed"]), 2)
+        self.assertIsNotNone(saved["warm_at"])
+
+    def test_test_mode_predicts_after_the_clean_air_until_stop(self):
+        self.start_guided("test")
+        self.measure(4.5, shift=0.3)
+        self.assertEqual(self.phase(), "clean")
+        self.assertIsNotNone(self.predictor.guide_record("reclean", 0))
+        status = self.measure(3.5, shift=0.3)
+        self.assertEqual(self.phase(), "testing")
+        self.assertEqual(status["state"], "collecting")
+        status = self.measure(2, shift=0.3)
+        self.assertEqual(status["result"]["label"], "clean_air")
+        self.assertEqual(status["reference"]["log"], "clean_air1")
+
+        # new clean air: predictions pause, then use the new reference
+        self.assertIsNone(self.predictor.guide_record("reclean", 0))
+        status = self.measure(1, shift=0.6)
+        self.assertEqual((self.phase(), status["state"]), ("clean", "waiting_clean_air"))
+        self.measure(4.5, shift=0.6)
+        self.assertEqual(self.predictor.cycle_ref["reference"]["log"], "clean_air2")
+        self.assertEqual(self.predictor.result["label"], "clean_air")
+        self.assertTrue(self.predictor.is_running())
+        self.assertTrue(self.run_dir.joinpath("predictions.csv").read_text().splitlines()[-1].endswith(',"",'))
+
+    def test_warm_up_waits_for_the_sensors_to_settle(self):
+        start, data = T0, {1: []}
+        guide = classifier.guided.new_guide("test", [])
+        # ln R falls fast after a cold start, then settles
+        for k in range(0, 25 * 60, 10):
+            data[1].append((start + k * 1000, [14.0 - 1.5 * math.exp(-k / 150)] * 10))
+            classifier.guided.warm_update(guide, start, start + k * 1000, data)
+            if guide["warm_at"]:
+                break
+        minutes = (guide["warm_at"] - start) / 60000
+        self.assertTrue(7 <= minutes <= 12, minutes)
+        self.assertFalse(guide["warm"]["capped"])
+
+        # sensors that never settle: go on after 20 min, with a note
+        guide = classifier.guided.new_guide("test", [])
+        data = {1: [(start + k * 1000, [14.0 - k / 600] * 10) for k in range(0, 21 * 60, 10)]}
+        for k in range(0, 21 * 60, 3):
+            classifier.guided.warm_update(guide, start, start + k * 1000, data)
+        self.assertTrue(guide["warm"]["capped"])
+        self.assertEqual(guide["warm_at"], start + 20 * 60 * 1000)
+
+    def test_a_capped_warm_up_is_noted_with_every_prediction(self):
+        self.start_guided("test")
+        session = json.loads(self.session.read_text())
+        session["guide"]["warm"]["capped"] = True
+        session["guide"]["warm_at"] = T0 + 60000
+        classifier.write_json_atomic(self.session, session)
+        self.measure(6.5)
+        self.assertEqual(self.predictor.result["label"], "clean_air")
+        self.assertIn("20 min", (self.run_dir / "predictions.csv").read_text().splitlines()[-1])
+
+    def test_a_reboot_marks_the_recording_as_interrupted(self):
+        self.start_guided("collect", [{"object": "Chili", "sample_class": "spicy", "distance_cm": 5, "notes": ""}])
+        self.write(2)
+        self.running = False
+        self.predictor._recover()
+        saved = json.loads((self.run_dir / "cycles.json").read_text())
+        self.assertTrue(saved["interrupted"])
+        self.assertFalse(self.session.exists())
+
     def test_unknown_board_uses_the_training_average(self):
         self.board.return_value = None
         self.write(2.5)

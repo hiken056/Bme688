@@ -52,17 +52,36 @@ The check compares temperatures, ticks, mode, duty and sleep. Profile names are 
 free: the sensors are matched by settings, in ascending sensor order, by both the interface and the Pi. On a mismatch,
 the panel offers **Use model profiles**, which shows the changes and asks for confirmation before saving the configuration.
 
-## Clean-air reference (test version)
+## Test and collect data
 
-Every prediction compares the smell with clean air:
-- for the first 15 minutes of a measurement, it uses the clean air the model was trained with. The Pi reads its board
-  from the device name (`bme688-01` is bme1, and so on). If the model has no clean air for that board, it uses the
-  average of the training boards, with a note;
-- from minute 15, it uses minutes 10-15 of the same measurement as clean air (the first 10 minutes are still settling).
-  This is saved as `reference.json` next to the recording, and `predictions.csv` shows `measurement` in the Reference column.
+The Acquisition page has a switch above the cycles: **Test** or **Collect data**. The choice and the number of cycles
+are saved on the Pi (`guide_settings.json`), so they are the same on every device and after a reboot.
+The Pi runs both, the page only shows them, so closing the phone changes nothing. The code is in `backend/guide.py`.
 
-So start every measurement in clean air, wait 15 minutes, then bring the sample without stopping.
-A new measurement starts with the training clean air again.
+**Collect data** (labelled samples for training):
+1. Warm-up, decided from the data (below).
+2. 3 min clean air: the reference for this cycle, saved as `reference_cycleN.json`.
+3. "Add the sample": sound, a bar at the bottom of the page, tap **Sample placed**.
+4. 10 min with the sample. Predictions start 2 min after the tap and use only data from after the tap.
+5. "Remove the sample", tap **Sample removed**, 3 min airing out, then the next cycle from step 2.
+   After the last sample the Pi stops the measurement on its own.
+
+Every prediction is saved with the sample and its class (`Sample`, `Expected` in `predictions.csv`), so the accuracy
+can be computed from the collected data. `cycles.json` keeps the form and when each sample was placed and removed.
+
+**Test** (anything, unlabelled): warm-up, 3 min clean air, then predictions until Stop.
+**New clean air** takes a new reference, for the next thing or after moving. Tests are saved in the `Tests` folder
+and are not used for training.
+
+**Warm-up**: every 30 s the Pi compares the last 1.5 min of each sensor with the 1.5 min before. The typical change of
+ln R over the heater steps, per minute, is the drift; the worst sensor counts. Warm when the drift is below 0.05 per
+minute 3 times in a row (0.05 in ln R is about 5% change in resistance). It needs 3 min of data first and never
+waits more than 20 min. If it hits that limit, it goes on anyway: `capped` in `cycles.json`, a pop-up on the page, and
+a warning with every prediction of that measurement. The bar on the page fills as the checks pass. On the recordings so far: 4 to 5.5 min when the board was already warm, 7.5 to 12.5 min
+after a cold start.
+
+If the Pi reboots during a measurement, `cycles.json` of that recording gets `"interrupted": true`.
+A measurement started without the switch (older interface) still uses minutes 10-15 as clean air.
 
 ## Checks before each prediction
 
