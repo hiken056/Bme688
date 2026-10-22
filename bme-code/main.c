@@ -22,6 +22,16 @@
 #define MAX_PARALLEL_TICKS 429
 #define MAX_SEQUENTIAL_TICKS 28
 #define DEFAULT_FILE_DURATION_MINUTES 30
+// read the sensors twice per tick, so no reading waits long enough to be overwritten
+#define POLL_MS          70
+#ifndef STATS_EVERY_MS
+#define STATS_EVERY_MS   60000
+#endif
+
+// exit codes the backend turns into a message on the page
+#define EXIT_BOARD 3
+#define EXIT_BUS   4
+#define EXIT_FILES 5
 
 // new data, valid gas reading, and stable heater
 #define BME68X_VALID_DATA  UINT8_C(0xB0)
@@ -45,30 +55,59 @@ typedef struct {
 static FILE *g_cycle_files[NUM_SENSORS];
 static volatile sig_atomic_t g_running = 1;
 static volatile sig_atomic_t g_shutdown_signal = 0;
+static volatile sig_atomic_t g_exit_code = 0;
 static LiveReading live[NUM_SENSORS];
 
-// shared thread locks
+// dropped readings per sensor since the last stats line
+typedef struct {
+    unsigned long lost;          // overwritten before they were read
+    unsigned long missing_steps; // heater steps with no usable reading at all
+} SensorStats;
+static SensorStats g_stats[NUM_SENSORS];
+
+// shared thread locks, one file lock per sensor so a slow sd card only holds one sensor
 static pthread_mutex_t spi_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t live_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t file_mutex[NUM_SENSORS];
 
 static void handle_shutdown(int sig) {
     g_shutdown_signal = sig;
     g_running = 0;
 }
 
+static void count_stat(unsigned long *counter, unsigned long amount) {
+    __atomic_fetch_add(counter, amount, __ATOMIC_RELAXED);
+}
+
+// stop recording and leave with this exit code
+static void fail(int code) {
+    g_exit_code = code;
+    g_running = 0;
+}
+
 static void close_session_files(void) {
-    pthread_mutex_lock(&file_mutex);
     for (int i = 0; i < NUM_SENSORS; i++) {
+        pthread_mutex_lock(&file_mutex[i]);
         if (g_cycle_files[i]) {
-            fflush(g_cycle_files[i]);
+            // onto the sd card now, so unplugging right after stop loses nothing
+            if (fflush(g_cycle_files[i]) != 0 || fsync(fileno(g_cycle_files[i])) != 0) {
+                printf("[FATAL] Could not save the last readings of sensor %d.\n", i + 1);
+            }
             fclose(g_cycle_files[i]);
             g_cycle_files[i] = NULL;
         }
+        pthread_mutex_unlock(&file_mutex[i]);
     }
     printf("[FILE] All measurement files closed.\n");
-    pthread_mutex_unlock(&file_mutex);
+}
+
+// heaters off: the sensors stay in parallel mode and keep heating until told to sleep
+static void sleep_sensors(struct bme68x_dev *sensors, int count) {
+    for (int i = 0; i < count; i++) {
+        bme68x_set_op_mode(BME68X_SLEEP_MODE, &sensors[i]);
+    }
+    printf("[STOP] Sensors asleep, heaters off.\n");
 }
 
 static long long monotonic_ms(void) {
@@ -294,8 +333,8 @@ static void load_all_profiles(SensorProfile profiles[NUM_SENSORS]) {
     long fsize = ftell(f); rewind(f);
     char *raw = malloc(fsize + 1);
     if (!raw) { fclose(f); return; }
-    fread(raw, 1, fsize, f);
-    raw[fsize] = '\0';
+    size_t got = fread(raw, 1, fsize, f);
+    raw[got] = '\0';
     fclose(f);
     
     printf("[CONFIG] Successfully read %s (%ld bytes)\n", config_path, fsize);
@@ -342,14 +381,14 @@ static FILE *open_session_file(int sensor_idx,
              "%s/sensor%d_%s.csv",
              file_set_dir, sensor_idx + 1, safe_preset);
     if (path_len < 0 || (size_t)path_len >= sizeof(filepath)) {
-        printf("[ERROR] Sensor %d: File path is too long.\n", sensor_idx + 1);
+        printf("[FATAL] Sensor %d: File path is too long.\n", sensor_idx + 1);
         return NULL;
     }
 
     FILE *f = fopen(filepath, "w");
     if (!f) {
-        printf("[ERROR] Sensor %d: Failed to create file: %s\n", sensor_idx + 1, filepath);
-        perror("[ERROR] Reason");
+        printf("[FATAL] Sensor %d: Failed to create file: %s\n", sensor_idx + 1, filepath);
+        perror("[FATAL] Reason");
         return NULL;
     }
     printf("[FILE] Sensor %d: %s\n", sensor_idx + 1, filepath);
@@ -359,9 +398,10 @@ static FILE *open_session_file(int sensor_idx,
     return f;
 }
 
-static void open_session_files(SensorProfile profiles[NUM_SENSORS],
-                               int file_duration_minutes,
-                               const char *measurement_dir) {
+// a new folder with one file per sensor, returns 0 when every file is open
+static int open_session_files(SensorProfile profiles[NUM_SENSORS],
+                              int file_duration_minutes,
+                              const char *measurement_dir) {
     time_t file_started_at = time(NULL);
     struct tm started_at;
     localtime_r(&file_started_at, &started_at);
@@ -382,38 +422,41 @@ static void open_session_files(SensorProfile profiles[NUM_SENSORS],
             ? snprintf(file_set_dir, sizeof(file_set_dir), "%s/%s", measurement_dir, set_name)
             : snprintf(file_set_dir, sizeof(file_set_dir), "%s/%s_%02d", measurement_dir, set_name, number);
         if (path_len < 0 || (size_t)path_len >= sizeof(file_set_dir)) {
-            printf("[ERROR] File set path is too long.\n");
-            return;
+            printf("[FATAL] File set path is too long.\n");
+            return -1;
         }
         if (mkdir(file_set_dir, 0777) == 0) {
             created = 1;
             break;
         }
         if (errno != EEXIST) {
-            printf("[ERROR] Failed to create file set folder: %s\n", file_set_dir);
-            return;
+            printf("[FATAL] Failed to create file set folder: %s (%s)\n", file_set_dir, strerror(errno));
+            return -1;
         }
     }
     if (!created) {
-        printf("[ERROR] Could not create a unique file set folder.\n");
-        return;
+        printf("[FATAL] Could not create a unique file set folder.\n");
+        return -1;
     }
 
-    pthread_mutex_lock(&file_mutex);
+    int ok = 1;
     for (int i = 0; i < NUM_SENSORS; i++) {
+        FILE *next = open_session_file(i, profiles[i].name, file_set_dir);
+        if (!next) ok = 0;
+        pthread_mutex_lock(&file_mutex[i]);
         if (g_cycle_files[i]) {
-            fflush(g_cycle_files[i]);
+            if (fflush(g_cycle_files[i]) != 0 || fsync(fileno(g_cycle_files[i])) != 0) ok = 0;
             fclose(g_cycle_files[i]);
         }
-        g_cycle_files[i] = open_session_file(
-            i, profiles[i].name, file_set_dir
-        );
+        g_cycle_files[i] = next;
+        pthread_mutex_unlock(&file_mutex[i]);
     }
-    pthread_mutex_unlock(&file_mutex);
+    return ok ? 0 : -1;
 }
 
+// written to a temporary file and renamed, so a reader never sees half a file
 static void write_live(LiveReading readings[NUM_SENSORS]) {
-    FILE *f = fopen(LIVE_PATH, "w");
+    FILE *f = fopen(LIVE_PATH ".tmp", "w");
     if (!f) return;
     fprintf(f, "{\n  \"sensors\": [\n");
     for (int i = 0; i < NUM_SENSORS; i++) {
@@ -432,7 +475,7 @@ static void write_live(LiveReading readings[NUM_SENSORS]) {
         }
     }
     fprintf(f, "  ]\n}\n");
-    fclose(f);
+    if (fclose(f) == 0) rename(LIVE_PATH ".tmp", LIVE_PATH);
 }
 
 typedef struct {
@@ -447,20 +490,33 @@ static void write_csv_reading(int sensor_idx,
                               const SensorProfile *profile,
                               const struct bme68x_data *data,
                               long long timestamp_ms) {
-    pthread_mutex_lock(&file_mutex);
-    if (!g_cycle_files[sensor_idx]) {
-        pthread_mutex_unlock(&file_mutex);
+    pthread_mutex_lock(&file_mutex[sensor_idx]);
+    FILE *f = g_cycle_files[sensor_idx];
+    if (!f) {
+        pthread_mutex_unlock(&file_mutex[sensor_idx]);
         return;
     }
 
-    fprintf(g_cycle_files[sensor_idx],
+    int written = fprintf(f,
             "%lld,%d,%d,%d,%.2f,%.2f,%.2f,%.2f\n",
             timestamp_ms, sensor_idx + 1,
             gas_index, profile->temps[gas_index],
             data->gas_resistance, data->temperature,
             data->humidity, data->pressure / 100.0f);
-    fflush(g_cycle_files[sensor_idx]);
-    pthread_mutex_unlock(&file_mutex);
+    // saved to the card once per cycle, not after every row
+    if (written > 0 && gas_index == NUM_STEPS - 1) written = fflush(f) == 0;
+    pthread_mutex_unlock(&file_mutex[sensor_idx]);
+    if (written <= 0) {
+        printf("[FATAL] Could not write the readings of sensor %d (%s).\n", sensor_idx + 1, strerror(errno));
+        fail(EXIT_FILES);
+    }
+}
+
+// a heater step with no reading shows as a jump in the step number
+static void count_missing_steps(int sensor_idx, uint8_t last_step, uint8_t step) {
+    if (last_step == 255) return;
+    int gap = ((int)step - (int)last_step - 1 + NUM_STEPS) % NUM_STEPS;
+    if (gap > 0) count_stat(&g_stats[sensor_idx].missing_steps, (unsigned long)gap);
 }
 
 static void complete_cycle(int sensor_idx,
@@ -507,10 +563,11 @@ void *sensor_thread_func(void *arg) {
     long long          stable_ts = 0;
     uint8_t            last_meas_index = 0;
     int                have_last_meas_index = 0;
+    uint8_t            last_step = 255;
     memset(&stable, 0, sizeof(stable));
 
     while (g_running) {
-        usleep(PROFILE_TICK_MS * 1000);
+        usleep(POLL_MS * 1000);
 
         struct bme68x_data data[3];
         uint8_t n_fields = 0;
@@ -519,17 +576,26 @@ void *sensor_thread_func(void *arg) {
             || n_fields == 0) continue;
 
         for (uint8_t fi = 0; fi < n_fields; fi++) {
-            if (data[fi].status != BME68X_VALID_DATA) continue;
+            if (!(data[fi].status & BME68X_NEW_DATA_MSK)) continue;
 
+            // each measurement has a number: a jump means readings were overwritten before we read them
             if (have_last_meas_index) {
                 uint8_t delta = (uint8_t)(data[fi].meas_index - last_meas_index);
                 if (delta == 0 || delta > 127) continue;
+                if (delta > 1) count_stat(&g_stats[s].lost, delta - 1);
             }
             last_meas_index = data[fi].meas_index;
             have_last_meas_index = 1;
 
+            // in parallel mode only one reading per heater step has a usable gas value
+            if (data[fi].status != BME68X_VALID_DATA) continue;
+
             uint8_t cur_idx = data[fi].gas_index;
             if (cur_idx >= NUM_STEPS) continue;
+            if (cur_idx != last_step) {
+                count_missing_steps(s, last_step, cur_idx);
+                last_step = cur_idx;
+            }
 
             struct timeval tv;
             gettimeofday(&tv, NULL);
@@ -551,6 +617,7 @@ void *sensor_thread_func(void *arg) {
                 if (cur_idx == (NUM_STEPS - 1)) {
                     complete_cycle(s, &cycle_count, profile, sensor, op_mode);
                     prev_idx = 255;
+                    have_last_meas_index = 0;  // the profile restarts, so does the count
                     break;
                 }
                 continue;
@@ -575,6 +642,7 @@ void *sensor_thread_func(void *arg) {
                 write_csv_reading(s, cur_idx, profile, &stable, stable_ts);
                 complete_cycle(s, &cycle_count, profile, sensor, op_mode);
                 prev_idx = 255;
+                have_last_meas_index = 0;  // the profile restarts, so does the count
             }
         }
     }
@@ -608,12 +676,27 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, handle_shutdown);
     signal(SIGINT,  handle_shutdown);
 
-    for (int i = 0; i < NUM_SENSORS; i++) g_cycle_files[i] = NULL;
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        g_cycle_files[i] = NULL;
+        pthread_mutex_init(&file_mutex[i], NULL);
+    }
 
     SensorProfile profiles[NUM_SENSORS];
     load_all_profiles(profiles);
 
-    if (linux_hal_init() != 0) return -1;
+    int8_t hal = linux_hal_init();
+    if (hal == HAL_NO_I2C) {
+        printf("[FATAL] I2C is off: /dev/i2c-1 is missing.\n");
+        return EXIT_BUS;
+    }
+    if (hal == HAL_NO_SPI) {
+        printf("[FATAL] SPI is off: /dev/spidev0.0 is missing.\n");
+        return EXIT_BUS;
+    }
+    if (hal != 0) {
+        printf("[FATAL] The sensor board does not answer on I2C.\n");
+        return EXIT_BOARD;
+    }
 
     struct bme68x_dev sensors[NUM_SENSORS];
     uint8_t sensor_ids[NUM_SENSORS];
@@ -629,7 +712,11 @@ int main(int argc, char *argv[]) {
         sensors[i].intf_ptr = &sensor_ids[i];
         sensors[i].amb_temp = 25;
 
-        if (bme68x_init(&sensors[i]) != BME68X_OK) return -1;
+        if (bme68x_init(&sensors[i]) != BME68X_OK) {
+            printf("[FATAL] Sensor %d does not answer.\n", i + 1);
+            sleep_sensors(sensors, i);
+            return EXIT_BOARD;
+        }
     }
 
     struct bme68x_conf conf;
@@ -641,7 +728,11 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < NUM_SENSORS; i++) {
         op_modes[i] = profile_op_mode(&profiles[i]);
-        if (bme68x_set_conf(&conf, &sensors[i]) != BME68X_OK) return -1;
+        if (bme68x_set_conf(&conf, &sensors[i]) != BME68X_OK) {
+            printf("[FATAL] Sensor %d could not be configured.\n", i + 1);
+            sleep_sensors(sensors, NUM_SENSORS);
+            return EXIT_BOARD;
+        }
 
         struct bme68x_heatr_conf hc;
         memset(&hc, 0, sizeof(hc));
@@ -664,12 +755,20 @@ int main(int argc, char *argv[]) {
                 : (uint16_t)(tick_ms - md);
         }
 
-        if (bme68x_set_heatr_conf(op_modes[i], &hc, &sensors[i]) != BME68X_OK) return -1;
-        if (bme68x_set_op_mode(op_modes[i], &sensors[i]) != BME68X_OK) return -1;
+        if (bme68x_set_heatr_conf(op_modes[i], &hc, &sensors[i]) != BME68X_OK ||
+            bme68x_set_op_mode(op_modes[i], &sensors[i]) != BME68X_OK) {
+            printf("[FATAL] Sensor %d could not start its heater profile.\n", i + 1);
+            sleep_sensors(sensors, NUM_SENSORS);
+            return EXIT_BOARD;
+        }
         printf("[CONFIG] Sensor %d operating in %s mode.\n", i + 1, profiles[i].mode);
     }
 
-    open_session_files(profiles, file_duration_minutes, measurement_dir);
+    if (open_session_files(profiles, file_duration_minutes, measurement_dir) != 0) {
+        close_session_files();
+        sleep_sensors(sensors, NUM_SENSORS);
+        return EXIT_FILES;
+    }
     for (int i = 0; i < NUM_SENSORS; i++) {
         memset(&live[i], 0, sizeof(live[i]));
         strncpy(live[i].preset_name, profiles[i].name, 63);
@@ -690,6 +789,7 @@ int main(int argc, char *argv[]) {
 
     long long next_file_ms = monotonic_ms() +
         (long long)file_duration_minutes * 60 * 1000;
+    long long next_stats_ms = monotonic_ms() + STATS_EVERY_MS;
 
     // update live data twice per second
     while (g_running) {
@@ -697,9 +797,25 @@ int main(int argc, char *argv[]) {
         if (!g_running) break;
         if (monotonic_ms() >= next_file_ms) {
             printf("[FILE] Starting a new %d minute file set.\n", file_duration_minutes);
-            open_session_files(profiles, file_duration_minutes, measurement_dir);
+            if (open_session_files(profiles, file_duration_minutes, measurement_dir) != 0) {
+                fail(EXIT_FILES);
+                break;
+            }
             next_file_ms = monotonic_ms() +
                 (long long)file_duration_minutes * 60 * 1000;
+        }
+        // once a minute: what was lost, only when something was
+        if (monotonic_ms() >= next_stats_ms) {
+            unsigned long bus = linux_hal_take_errors();
+            if (bus) printf("[WARN] %lu SPI/I2C errors in the last minute.\n", bus);
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                unsigned long lost = __atomic_exchange_n(&g_stats[i].lost, 0, __ATOMIC_RELAXED);
+                unsigned long missing = __atomic_exchange_n(&g_stats[i].missing_steps, 0, __ATOMIC_RELAXED);
+                if (lost || missing) {
+                    printf("[STATS] Sensor %d: %lu readings lost, %lu heater steps missing.\n", i + 1, lost, missing);
+                }
+            }
+            next_stats_ms += STATS_EVERY_MS;
         }
         pthread_mutex_lock(&live_mutex);
         write_live(live);
@@ -714,5 +830,6 @@ int main(int argc, char *argv[]) {
         printf("[STOP] Signal %d received.\n", g_shutdown_signal);
     }
     close_session_files();
-    return 0;
+    sleep_sensors(sensors, NUM_SENSORS);
+    return g_exit_code;
 }
