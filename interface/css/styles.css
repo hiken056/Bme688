@@ -1970,3 +1970,55 @@ select:focus { border-color: var(--primary); }
 }
 .phase-card [hidden].phase-button { display: none; }
 .duration-control .mode-toggle label { text-transform: none; letter-spacing: 0; color: inherit; }
+
+/* error card in the middle of the page, one at a time */
+.error-card {
+    width: min(400px, calc(100% - 2rem));
+    margin: auto;
+    padding: 1.3rem 1.4rem 1.2rem;
+    color: var(--text);
+    background: #1d1a2b;
+    border: 2px solid var(--danger);
+    border-radius: var(--radius);
+    box-shadow: 0 0 0 6px rgba(214,48,49,0.15), 0 20px 70px rgba(0,0,0,0.6);
+}
+.error-card::backdrop {
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(3px);
+}
+.error-card[open] {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+.error-top {
+    display: flex;
+    justify-content: space-between;
+    color: var(--danger-h);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.error-top span:last-child {
+    color: var(--muted);
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 400;
+}
+.error-card h3 {
+    font-family: var(--font-ui);
+    font-size: 1.15rem;
+}
+.error-card p {
+    color: var(--muted);
+    font-size: 0.88rem;
+    line-height: 1.4;
+}
+.error-card .error-fix { color: var(--text); }
+.error-card .error-fix strong { color: var(--danger-h); font-weight: 600; }
+.error-ok {
+    align-self: flex-end;
+    min-width: 96px;
+    margin-top: 0.4rem;
+}
