@@ -161,6 +161,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }))
             .then(r => r.json())
             .then(res => {
+                if (res.status !== 'success' && res.error) {
+                    // the sensors did not start: the card says why, the form stays for another try
+                    window.ErrorCard.show(window.ErrorCard.cardFor(res.error, res.message));
+                    return;
+                }
                 if (res.status !== 'success') throw new Error(res.message || 'Start failed');
                 sessionDialog.close();
                 window.Guide.start(form.mode, form.cycles);
@@ -197,6 +202,8 @@ document.addEventListener('DOMContentLoaded', () => {
             fetch('/api/logs')
                 .then(r => r.json())
                 .then(res => {
+                    // an answer that arrives after stop must not bring "recording" back
+                    if (!isRunning) return;
                     if (res.status === 'success' && res.logs) {
                         // file messages push the start messages out of the log tail
                         sensorsStarted = sensorsStarted || ['[S', 'Collecting data', '[OK] Sensor', '[FILE]'].some(text => res.logs.includes(text));
@@ -247,6 +254,16 @@ document.addEventListener('DOMContentLoaded', () => {
         statusLog.innerHTML = '<p class="success-text">All cycles done. You can remove the sample.</p>';
     });
 
+    // a measurement that stopped on its own: one card per failure on each device
+    function showFailure(failure) {
+        if (!failure || Date.now() - failure.id > 3600000) return;
+        let seen = null;
+        try { seen = localStorage.getItem('bmeSeenFailure'); } catch (e) {}
+        if (seen === String(failure.id)) return;
+        try { localStorage.setItem('bmeSeenFailure', String(failure.id)); } catch (e) {}
+        window.ErrorCard.show(window.ErrorCard.cardFor(failure.code, failure.message));
+    }
+
     // keep several open devices in sync
     function checkMeasurementStatus() {
         fetch('/api/status')
@@ -257,6 +274,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         startUI(res.file_duration_minutes, res.measurement_title);
                     }
                     else if (!res.is_running && isRunning) stopUI();
+                    showFailure(res.failure);
                 }
             }).catch(e => {});
     }

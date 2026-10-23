@@ -11,6 +11,7 @@ import os
 import re
 from pathlib import Path
 import tempfile
+import threading
 import time
 from typing import Literal, Optional
 import unicodedata
@@ -58,6 +59,15 @@ sensor_process = None
 sensor_file_started_at = None
 sensor_file_duration_minutes = None
 sensor_measurement_title = None
+# how the last measurement ended when nobody pressed stop, shown once on every page
+last_failure = None
+sensor_stopping = False
+sensor_lock = threading.RLock()
+
+LOG_PATH = Path("/tmp/bme_log.txt")
+# exit codes of the sensor program, see bme-code/main.c
+FAILURES = {3: "board", 4: "bus", 5: "files"}
+START_WAIT_S = 5
 FILE_DURATION_OPTIONS = {1, 2, 3, 4, 5, 10, 15, 20, 25, 30}
 DEFAULT_FILE_DURATION_MINUTES = 30
 
@@ -207,9 +217,55 @@ def sensor_program_supports_measurement_folders() -> bool:
         return False
 
 
+def last_fatal_line() -> str:
+    try:
+        lines = LOG_PATH.read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    fatal = [line for line in lines if line.startswith("[FATAL]")]
+    return fatal[-1].replace("[FATAL]", "").strip() if fatal else ""
+
+
+# the sensor program ended on its own: keep why, mark the recording as interrupted
+def record_failure(exit_code: int) -> None:
+    global sensor_process, last_failure
+    last_failure = {"id": int(time.time() * 1000), "code": FAILURES.get(exit_code, "crashed"),
+                    "message": last_fatal_line(), "exit_code": exit_code}
+    sensor_process = None
+    try:
+        with open(LOG_PATH, "a") as log:
+            log.write(f"[STOP] The sensor program ended on its own (exit code {exit_code}).\n")
+    except OSError:
+        pass
+    predictor._recover()
+
+
+# waits until the sensors run, returns the exit code if the program ended while starting
+def wait_for_start(process) -> int | None:
+    deadline = time.monotonic() + START_WAIT_S
+    while time.monotonic() < deadline:
+        code = process.poll()
+        if code is not None:
+            return code
+        try:
+            log = LOG_PATH.read_text(errors="replace")
+        except OSError:
+            log = ""
+        if "[START]" in log or "[OK] Sensor replay" in log:
+            return None
+        time.sleep(0.1)
+    return None
+
+
 def sensor_is_running() -> bool:
-    if sensor_process and sensor_process.poll() is None:
-        return True
+    with sensor_lock:
+        if sensor_process is not None:
+            code = sensor_process.poll()
+            if code is None:
+                return True
+            if not sensor_stopping:
+                record_failure(code)
+                return False
     return subprocess.run(
         ["pgrep", "-x", "main"],
         stdout=subprocess.DEVNULL,
@@ -411,6 +467,7 @@ def get_status():
         "file_duration_minutes": sensor_file_duration_minutes,
         "file_remaining_seconds": file_remaining_seconds,
         "measurement_title": sensor_measurement_title,
+        "failure": last_failure,
     }
 
 
@@ -489,6 +546,7 @@ def delete_measurement_files(request: DeleteFilesRequest):
 def start_sensor(request: StartSensorRequest):
     global sensor_process, sensor_file_started_at, sensor_file_duration_minutes
     global sensor_measurement_title
+    global last_failure
     try:
         if sensor_process and sensor_process.poll() is None:
             return {"status": "error", "message": "Sensor is already running"}
@@ -508,10 +566,10 @@ def start_sensor(request: StartSensorRequest):
             request.measurement_title
         )
             
-        with open("/tmp/bme_log.txt", "w") as f:
+        with open(LOG_PATH, "w") as f:
             f.write("Starting sensor...\n")
             
-        with open("/tmp/bme_log.txt", "a") as log_file:
+        with open(LOG_PATH, "a") as log_file:
             sensor_env = os.environ.copy()
             sensor_env["BME_MEASUREMENT_DIR"] = str(measurement_dir)
             sensor_process = subprocess.Popen(
@@ -521,6 +579,14 @@ def start_sensor(request: StartSensorRequest):
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
             )
+
+        # a board, bus or storage problem ends the program right away: no recording, a card instead
+        last_failure = None
+        exit_code = wait_for_start(sensor_process)
+        if exit_code is not None:
+            sensor_process = None
+            return {"status": "error", "error": FAILURES.get(exit_code, "crashed"),
+                    "message": last_fatal_line() or "The sensor program stopped while starting."}
 
         sensor_file_started_at = time.monotonic()
         sensor_file_duration_minutes = file_duration_minutes
@@ -541,28 +607,36 @@ def start_sensor(request: StartSensorRequest):
                                  if measurement_dir.is_relative_to(SENSOR_DIR) else str(measurement_dir)),
         }
     except Exception as e:
-        with open("/tmp/bme_log.txt", "a") as f:
+        with open(LOG_PATH, "a") as f:
             f.write(f"Failed to start: {str(e)}\n")
         return {"status": "error", "message": str(e)}
 
 @app.post("/api/stop-sensor")
 def stop_sensor():
     global sensor_process, sensor_file_started_at, sensor_file_duration_minutes
-    global sensor_measurement_title
+    global sensor_measurement_title, sensor_stopping
     try:
+        with sensor_lock:
+            sensor_stopping = True
         if sensor_process and sensor_process.poll() is None:
             sensor_process.terminate()
-            sensor_process.wait(timeout=2)
+            sensor_process.wait(timeout=3)
             sensor_process = None
         else:
+            sensor_process = None
             subprocess.run(["pkill", "-x", "main"])
         SESSION_PATH.unlink(missing_ok=True)
+        # everything written so far onto the sd card, before the page says stopped
+        os.sync()
         sensor_file_started_at = None
         sensor_file_duration_minutes = None
         sensor_measurement_title = None
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    finally:
+        with sensor_lock:
+            sensor_stopping = False
 
 @app.get("/api/latest")
 def get_latest():
@@ -586,7 +660,7 @@ def get_logs():
         if not os.path.exists("/tmp/bme_log.txt"):
             return {"status": "success", "logs": "No logs yet."}
         
-        with open("/tmp/bme_log.txt", "r") as f:
+        with open(LOG_PATH, "r") as f:
             lines = f.readlines()
         tail = "".join(lines[-20:])
         return {"status": "success", "logs": tail}

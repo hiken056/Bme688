@@ -38,6 +38,7 @@
     let shown = null;                             // the step the bottom bar is about
     let cappedSeen = false;                       // the 20 min warm-up note was read
     let sending = false;
+    let generation = 0;                           // grows at every stop, old answers are ignored
 
     function load() {
         try { return JSON.parse(localStorage.getItem(STORE)); } catch (e) { return null; }
@@ -272,8 +273,11 @@
             return;
         }
         if (preview.isDemo) return;
+        const asked = generation;
         try {
             const next = await (await fetch('/api/guide')).json();
+            // stopped while the answer was on its way: keep the card hidden
+            if (asked !== generation) return;
             if (state?.active && !next.active && next.finished) finished();
             state = next;
             render();
@@ -287,6 +291,7 @@
     }
 
     function hide() {
+        generation += 1;
         clearInterval(timer);
         timer = null;
         state = null;

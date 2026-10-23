@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // live data from the device
     let live = null;
     let liveError = '';
+    let uiChanges = 0;      // grows at every start and stop, older answers are ignored
     let liveTimer = null;
     // countdown to the next prediction
     let nextAt = null;
@@ -274,13 +275,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // device polling
     async function poll() {
         if (preview.isDemo) return;
+        const asked = uiChanges;
         try {
-            live = await preview.api('/api/prediction', {}, 5000);
+            const answer = await preview.api('/api/prediction', {}, 5000);
+            // started or stopped while the answer was on its way: wait for the next one
+            if (asked !== uiChanges) return;
+            live = answer;
             liveError = '';
             const seconds = live.next_prediction_s ?? live.collecting_remaining_s;
             nextKind = live.next_prediction_s != null ? 'next' : 'first';
             nextAt = live.running && seconds != null ? Date.now() + seconds * 1000 : null;
-            if (live.running && !measuring) measuring = true;
         } catch (error) {
             liveError = error.message;
         }
@@ -414,6 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
         render();
     });
     window.addEventListener('measurement-ui-change', event => {
+        uiChanges += 1;
         const wasMeasuring = measuring;
         measuring = event.detail.running;
         if (!measuring) nextAt = null;
