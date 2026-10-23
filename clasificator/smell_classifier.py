@@ -112,12 +112,15 @@ def read_cycles(csv_path):
         if len(p) == 8:
             try: rows.append((int(p[0]), int(p[2]), float(p[4])))
             except ValueError: pass
-    cycles, current, t0 = [], {}, None
+    # a new cycle starts when the step number goes back, so a cycle with a missing step is skipped, not glued to the next
+    cycles, current, t0, last = [], {}, None, -1
     for t, step, ohm in rows:
-        if step == 0:
+        if current and step <= last:
             if len(current) == 10: cycles.append([t0] + [current[i] for i in range(10)])
-            current, t0 = {}, t
+            current, t0 = {}, None
+        if not current: t0 = t
         current[step] = np.log(ohm) if ohm < CLIP_OHM else np.nan
+        last = step
     if len(current) == 10: cycles.append([t0] + [current[i] for i in range(10)])
     return pd.DataFrame(cycles, columns=['t_ms'] + [f's{i}' for i in range(10)])
 

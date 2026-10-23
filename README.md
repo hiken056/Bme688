@@ -97,13 +97,25 @@ This stops the backend, sensor and access point. Saved configuration and measure
 
 ## Classifier
 
-Models are uploaded on the Classifier page and stored on the Pi. During a measurement, the Acquisition page shows
-the live prediction, the checks behind it and the clean-air reference:
+Models are uploaded on the Classifier page and stored on the Pi. The Pi runs the measurement and the predictions,
+the page only shows them, so closing the phone changes nothing.
 
 1. Classifier page: add the model JSON and select it.
-2. Start a measurement. The first prediction comes after 2 minutes, then every 30 seconds.
-3. Predictions are saved to `predictions.csv` in the recording.
+2. Acquisition page: choose **Test** or **Collect data** above the start button, then press START.
 
-The first 15 minutes after the sensors switch on are less reliable: they are still warming up.
+Both start with a warm-up: the Pi waits until the resistance changes less than 5% per minute (usually 4 to 10 min,
+at most 20). Then 3 min of clean air, used as the reference. Keep the sample away until the page asks for it.
+
+**Test**: nothing to fill in. After the clean air, bring anything close to the sensors. Predictions run every
+30 seconds until you press Stop. Tap **New clean air** after moving to another room.
+Tests are saved in the `Tests` folder and are not used for training.
+
+**Collect data**: choose the number of cycles and fill in each sample: object, class, distance and notes.
+For each cycle: clean air, then a sound and a bar at the bottom of the page, place the sample and tap
+**Sample placed**, 10 min with the sample, tap **Sample removed**, 3 min airing out.
+The measurement stops on its own after the last sample.
+
+Each recording keeps `cycles.json` (the form and the steps), `reference_cycleN.json` (the clean air) and
+`predictions.csv` (every prediction, with the sample when collecting).
 
 Details: [CLASSIFIER_MODELS.md](CLASSIFIER_MODELS.md).

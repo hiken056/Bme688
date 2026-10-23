@@ -54,6 +54,8 @@ def write_json_atomic(path: Path, payload) -> None:
             json.dump(payload, handle)
             handle.flush()
             os.fsync(handle.fileno())
+        # readable by everyone, so scp as the normal user copies it too
+        os.chmod(temp, 0o644)
         os.replace(temp, path)
     finally:
         if os.path.exists(temp):
@@ -384,7 +386,7 @@ class CycleReader:
     def __init__(self, path: Path, clip_ohm: float):
         self.path, self.clip = path, clip_ohm
         self.offset, self.rest = 0, b""
-        self.current, self.t0 = {}, None
+        self.current, self.t0, self.last_step = {}, None, -1
         self.cycles, self.first_t, self.last_t = [], None, None
 
     def update(self) -> None:
@@ -415,11 +417,15 @@ class CycleReader:
             if self.first_t is None:
                 self.first_t = t
             self.last_t = t
-            if step == 0:
+            # a new cycle starts when the step number goes back, so a cycle with a missing step is skipped, not glued to the next
+            if self.current and step <= self.last_step:
                 if len(self.current) == 10:
                     self.cycles.append((self.t0, [self.current[i] for i in range(10)]))
-                self.current, self.t0 = {}, t
+                self.current, self.t0 = {}, None
+            if not self.current:
+                self.t0 = t
             self.current[step] = math.log(ohm) if 0 < ohm < self.clip else None
+            self.last_step = step
         if self.cycles and self.last_t is not None:
             keep_from = self.last_t - KEEP_MS
             if self.cycles[0][0] < keep_from:
