@@ -30,7 +30,6 @@ class SensorFailures(unittest.TestCase):
         }
         for name, value in patches.items():
             patch.object(main, name, value).start()
-        patch.object(main, "sensor_program_supports_measurement_folders", return_value=True).start()
         patch.object(main.predictor, "session_path", session).start()
         patch.object(main.predictor.data, "session_path", session).start()
         patch.object(main.predictor.data, "root", self.root / "measurements").start()

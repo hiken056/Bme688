@@ -40,7 +40,6 @@ MEASUREMENTS_DIR = Path(
 
 # saved config survives reboot
 CONFIG_PATH = Path(os.environ.get("BME_CONFIG_PATH", "/var/lib/bme688/config.json"))
-LEGACY_CONFIG_PATH = Path("/tmp/bme_config.json")
 # models and clean air live next to the config
 STATE_DIR = Path(os.environ.get("BME_STATE_DIR", CONFIG_PATH.parent))
 # the running measurement, kept over a reboot to mark its recording as interrupted
@@ -65,6 +64,8 @@ sensor_stopping = False
 sensor_lock = threading.RLock()
 
 LOG_PATH = Path("/tmp/bme_log.txt")
+# newest reading of each sensor, written by the sensor program
+LIVE_PATH = Path("/tmp/bme_latest.json")
 # exit codes of the sensor program, see bme-code/main.c
 FAILURES = {3: "board", 4: "bus", 5: "files"}
 START_WAIT_S = 5
@@ -164,12 +165,6 @@ def read_config() -> dict | None:
             payload = normalize_config(json.load(config_file))
         return payload
 
-    if LEGACY_CONFIG_PATH.exists():
-        with LEGACY_CONFIG_PATH.open("r", encoding="utf-8") as legacy_file:
-            payload = normalize_config(json.load(legacy_file))
-        write_config(payload)
-        return payload
-
     return None
 
 
@@ -201,20 +196,6 @@ def get_measurement_folder(title: str):
     title_dir = MEASUREMENTS_DIR / safe_title
     title_dir.mkdir(parents=True, exist_ok=True)
     return safe_title, title_dir
-
-
-def sensor_program_supports_measurement_folders() -> bool:
-    try:
-        result = subprocess.run(
-            [str(SENSOR_BINARY), "--measurement-folder-support"],
-            cwd=SENSOR_DIR,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=2,
-        )
-        return result.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
 
 
 def last_fatal_line() -> str:
@@ -550,11 +531,6 @@ def start_sensor(request: StartSensorRequest):
     try:
         if sensor_process and sensor_process.poll() is None:
             return {"status": "error", "message": "Sensor is already running"}
-        if not sensor_program_supports_measurement_folders():
-            return {
-                "status": "error",
-                "message": "Sensor program is outdated. Rebuild bme-code and try again.",
-            }
 
         file_duration_minutes = (
             request.file_duration_minutes
@@ -641,23 +617,18 @@ def stop_sensor():
 @app.get("/api/latest")
 def get_latest():
     try:
-        global sensor_process
         if sensor_process and sensor_process.poll() is not None:
             return {"status": "error", "message": "Sensor process crashed."}
-
-        if not os.path.exists("/tmp/bme_latest.json"):
+        if not LIVE_PATH.exists():
             return {"status": "error", "message": "Waiting for sensor data..."}
-            
-        with open("/tmp/bme_latest.json", "r") as f:
-            data = json.load(f)
-        return {"status": "success", "data": data}
+        return {"status": "success", "data": json.loads(LIVE_PATH.read_text())}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/logs")
 def get_logs():
     try:
-        if not os.path.exists("/tmp/bme_log.txt"):
+        if not LOG_PATH.exists():
             return {"status": "success", "logs": "No logs yet."}
         
         with open(LOG_PATH, "r") as f:

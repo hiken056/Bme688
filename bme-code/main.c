@@ -16,7 +16,6 @@
 #define NUM_SENSORS      8
 #define NUM_STEPS        10
 #define CONFIG_PATH      "/var/lib/bme688/config.json"
-#define LEGACY_CONFIG_PATH "/tmp/bme_config.json"
 #define LIVE_PATH        "/tmp/bme_latest.json"
 #define PROFILE_TICK_MS  140
 #define MAX_PARALLEL_TICKS 429
@@ -321,10 +320,6 @@ static void load_all_profiles(SensorProfile profiles[NUM_SENSORS]) {
     if (!config_path || config_path[0] == '\0') config_path = CONFIG_PATH;
 
     FILE *f = fopen(config_path, "r");
-    if (!f && strcmp(config_path, LEGACY_CONFIG_PATH) != 0) {
-        f = fopen(LEGACY_CONFIG_PATH, "r");
-        if (f) config_path = LEGACY_CONFIG_PATH;
-    }
     if (!f) {
         printf("[CONFIG] Warning: Could not open %s. Using defaults.\n", config_path);
         return;
@@ -651,10 +646,6 @@ void *sensor_thread_func(void *arg) {
 
 int main(int argc, char *argv[]) {
     setvbuf(stdout, NULL, _IOLBF, 0);
-
-    if (argc == 2 && strcmp(argv[1], "--measurement-folder-support") == 0) {
-        return 0;
-    }
 
     printf("\nBME688 MEASUREMENTS\n");
 
