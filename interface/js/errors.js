@@ -1,5 +1,4 @@
 // error cards: one at a time, in the middle of the page, ok shows the next one
-// demo: ?demo=1&errors=1 shows every card the device can send
 (() => {
     const dialog = document.getElementById('error-card');
     const kindText = document.getElementById('error-kind');
@@ -31,9 +30,6 @@
         }
     }
 
-    // every card, for the demo
-    const DEMO = [cardFor('board'), cardFor('bus', 'SPI'), cardFor('files'), cardFor('crashed')];
-
     function render(card) {
         kindText.textContent = card.kind;
         const total = shownCount + queue.length;
@@ -41,7 +37,6 @@
         titleText.textContent = card.title;
         detailText.textContent = card.detail;
         fixText.textContent = card.fix;
-        dialog.dataset.kind = card.kind === 'Warning' ? 'warning' : 'error';
     }
 
     function next() {
@@ -72,11 +67,6 @@
         e.preventDefault();
         next();
     });
-
-    const params = new URLSearchParams(window.location.search);
-    if (window.ClassifierPreview?.isDemo && params.get('errors') === '1') {
-        window.addEventListener('load', () => show(DEMO));
-    }
 
     window.ErrorCard = { show, cardFor };
 })();

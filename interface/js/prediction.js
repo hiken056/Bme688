@@ -3,16 +3,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const result = document.getElementById('prediction-result');
     const updated = document.getElementById('prediction-updated');
     const windowLabel = document.getElementById('prediction-window');
-    const stateSelect = document.getElementById('prediction-demo-state');
     const matchDialog = document.getElementById('profile-match-dialog');
     const matchForm = document.getElementById('profile-match-form');
     const matchError = document.getElementById('profile-match-error');
     const matchApply = document.getElementById('profile-match-apply');
     const matchCancel = document.getElementById('profile-match-cancel');
     let measuring = false;
-    let demoState = 'idle';
-    let demoStartedAt = null;
-    let previewOverride = false;
     let matchingProfiles = false;
     let matchPlan = null;
     // live data from the device
@@ -23,8 +19,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // countdown to the next prediction
     let nextAt = null;
     let nextKind = 'next';
-
-    document.getElementById('prediction-demo-controls').hidden = !preview.showControls;
 
     const states = {
         no_model: ['No model selected', 'Choose a classifier to prepare live predictions.', 'Select a model', 'classifier.html'],
@@ -66,10 +60,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString([], { day: 'numeric', month: 'short' });
     }
 
-    function pageLink(page) {
-        return `${page}${preview.isDemo ? `?demo=1${preview.showControls ? '&controls=1' : ''}` : ''}`;
-    }
-
     // options: progress, note, actions
     function renderState(state, model, message, options = {}) {
         if (state === 'incompatible') return renderMismatch(model, preview.compatibility(model));
@@ -88,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="prediction-progress-note">${preview.escapeHtml(options.note ||
                         `${model?.window_seconds || 120} s analysis window`)}</span>` : ''}
                 ${options.actions || ''}
-                ${action ? `<a class="btn btn-outline" href="${pageLink(href)}">${action}</a>` : ''}
+                ${action ? `<a class="btn btn-outline" href="${href}">${action}</a>` : ''}
             </div>`;
         updated.textContent = 'No predictions yet';
     }
@@ -105,7 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     'This model needs a different sensor setup. Use its profiles to enable predictions, or record without predictions.'}</p>
                 ${!measuring ? `<div class="prediction-mismatch-actions">
                     <button id="prediction-match-profiles" class="btn btn-primary" type="button" ${matchingProfiles ? 'disabled' : ''}>Use model profiles</button>
-                    <a class="classifier-text-link" href="${pageLink('config.html')}">Configure manually</a>
+                    <a class="classifier-text-link" href="config.html">Configure manually</a>
                 </div>` : ''}
                 ${check.issues?.length ? `<details class="prediction-profile-details">
                     <summary>See what differs <span class="classifier-chevron" aria-hidden="true"></span></summary>
@@ -115,7 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updated.textContent = 'Predictions unavailable';
     }
 
-    // prediction from the device or the demo
+    // prediction from the device
     function renderResult(prediction, model) {
         const kind = prediction.state;
         const confident = kind === 'ready';
@@ -171,14 +161,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function ensureStopped() {
-        if (measuring || (preview.isDemo && preview.readSession().running)) {
-            throw new Error('Stop the measurement before changing sensor profiles.');
-        }
-        if (!preview.isDemo) {
-            const status = await request('/api/status');
-            if (status.status !== 'success') throw new Error('Could not verify that the measurement is stopped.');
-            if (status.is_running) throw new Error('Stop the measurement before changing sensor profiles.');
-        }
+        if (measuring) throw new Error('Stop the measurement before changing sensor profiles.');
+        const status = await request('/api/status');
+        if (status.status !== 'success') throw new Error('Could not verify that the measurement is stopped.');
+        if (status.is_running) throw new Error('Stop the measurement before changing sensor profiles.');
     }
 
     function setMatchPlan(model) {
@@ -206,7 +192,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const model = preview.activeModel();
             if (!model) throw new Error('Select a model first.');
             setMatchPlan(model);
-            previewOverride = false;
             if (!matchPlan.changes.length) { matchPlan = null; return; }
             matchError.textContent = '';
             matchDialog.showModal();
@@ -250,16 +235,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error('The sensor settings changed. Review the updated assignments before applying.');
             }
             await ensureStopped();
-            if (preview.isDemo) preview.saveDemoConfiguration(matchPlan.config);
-            else {
-                const saved = await request('/api/config', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(matchPlan.config)
-                });
-                if (saved.status !== 'success') throw new Error(saved.message || 'Could not save the sensor profiles.');
-                try { localStorage.setItem('bmeConfig', JSON.stringify(matchPlan.config)); } catch (error) {}
-                await preview.refreshConfiguration();
-                if (!preview.compatibility(model).compatible) throw new Error('Profiles saved, but the matching configuration could not be verified. Check the device before starting.');
-            }
+            const saved = await request('/api/config', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(matchPlan.config)
+            });
+            if (saved.status !== 'success') throw new Error(saved.message || 'Could not save the sensor profiles.');
+            try { localStorage.setItem('bmeConfig', JSON.stringify(matchPlan.config)); } catch (error) {}
+            await preview.refreshConfiguration();
+            if (!preview.compatibility(model).compatible) throw new Error('Profiles saved, but the matching configuration could not be verified. Check the device before starting.');
             matchDialog.close();
         } catch (error) {
             matchError.textContent = error.name === 'AbortError' ? 'The device did not respond. Check its settings before trying again.' : error.message;
@@ -274,7 +256,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // device polling
     async function poll() {
-        if (preview.isDemo) return;
         const asked = uiChanges;
         try {
             const answer = await preview.api('/api/prediction', {}, 5000);
@@ -293,7 +274,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function schedulePolling() {
         clearTimeout(liveTimer);
-        if (preview.isDemo) return;
         const delay = document.hidden ? 30000 : measuring ? 3000 : 15000;
         liveTimer = setTimeout(async () => {
             if (!document.hidden) await poll();
@@ -348,25 +328,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function demoPrediction(model, unknown) {
-        const labels = model.classes.slice(0, 4);
-        // the demo follows what is in front of the sensors
-        const wanted = { clean_air: 'clean air', spicy: 'spicy', bad_smell: 'bad smell' }[window.Guide?.demoStage()?.sample];
-        const preferred = labels.find(label => label.toLowerCase() === wanted) || labels[0];
-        const ranked = [preferred, ...labels.filter(label => label !== preferred)];
-        const scores = unknown ? [38, 29, 20, 13] : [86, 8, 4, 2];
-        // keep demo probabilities consistent when a model has fewer classes
-        if (ranked.length === 1) scores[0] = unknown ? 38 : 100;
-        else scores[ranked.length - 1] += scores.slice(ranked.length).reduce((sum, value) => sum + value, 0);
-        return {
-            state: unknown ? 'unknown' : 'ready', label_text: preferred, top_text: preferred,
-            confidence: scores[0] / 100, window_seconds: model.window_seconds, time: new Date().toISOString(),
-            probabilities: ranked.map((label, i) => ({ label, p: scores[i] / 100 })), warnings: []
-        };
-    }
-
     function renderCountdown() {
-        if (preview.isDemo || !measuring || !nextAt || !preview.activeModel()) return;
+        if (!measuring || !nextAt || !preview.activeModel()) return;
         const seconds = Math.ceil((nextAt - Date.now()) / 1000);
         updated.textContent = seconds > 0
             ? `${nextKind === 'first' ? 'First' : 'Next'} prediction in ${duration(seconds)}`
@@ -378,9 +341,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const loading = preview.modelsStatus();
         document.getElementById('prediction-model-name').textContent = model ? `${model.name} v${model.version}` : 'No model selected';
         // which clean air the predictions are compared with
-        const stage = preview.isDemo ? window.Guide?.demoStage() : null;
-        const guided = stage || (live?.reference?.source === 'cycle' ? live.reference : null);
-        const testing = stage ? stage.mode === 'test' : live?.reference?.log?.startsWith('clean_air');
+        const guided = live?.reference?.source === 'cycle' ? live.reference : null;
+        const testing = live?.reference?.log?.startsWith('clean_air');
         windowLabel.textContent = !model ? ''
             : guided?.cycle ? (testing ? 'Uses the latest clean air' : `Uses clean air of cycle ${guided.cycle}`)
             : live?.reference?.averaged ? 'Uses average reference air' : 'Uses reference air';
@@ -391,74 +353,25 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (!preview.compatibility(model).compatible) {
             const check = preview.compatibility(model);
             renderState(check.status === 'mismatch' ? 'incompatible' : check.status, model, check.message);
-        } else if (!measuring && !previewOverride) {
+        } else if (!measuring) {
             renderState('idle', model);
-        } else if (!preview.isDemo) {
-            renderLive(model);
-        } else if (stage) {
-            // the demo follows the cycles: nothing before the clean air, then one window of data
-            if (stage.key.startsWith('waiting')) renderState(stage.key, model);
-            else if (stage.key === 'collecting') {
-                renderState('collecting', model, null, {
-                    progress: (1 - stage.left_s / 120) * 100, note: `First prediction in about ${duration(stage.left_s)}`
-                });
-            } else renderResult(demoPrediction(model, false), model);
-        } else if (demoState === 'ready' || demoState === 'unknown') {
-            renderResult(demoPrediction(model, demoState === 'unknown'), model);
         } else {
-            renderState(demoState, model);
+            renderLive(model);
         }
         renderCountdown();
     }
 
-    stateSelect.addEventListener('change', () => {
-        demoState = stateSelect.value;
-        previewOverride = true;
-        demoStartedAt = null;
-        render();
-    });
     window.addEventListener('measurement-ui-change', event => {
         uiChanges += 1;
-        const wasMeasuring = measuring;
         measuring = event.detail.running;
         if (!measuring) nextAt = null;
-        previewOverride = false;
         preview.refreshConfiguration();
-        if (preview.isDemo) {
-            if (measuring && !wasMeasuring) {
-                demoStartedAt = Date.now();
-                demoState = 'collecting';
-            } else if (!measuring) {
-                demoStartedAt = null;
-                demoState = 'idle';
-            }
-            stateSelect.value = demoState;
-        } else {
-            poll();
-            schedulePolling();
-        }
+        poll();
+        schedulePolling();
         render();
     });
-    if (preview.isDemo) {
-        setInterval(() => {
-            if (!measuring || !demoStartedAt) return;
-            const elapsed = Date.now() - demoStartedAt;
-            const nextState = elapsed < 4000 ? 'collecting' : 'ready';
-            if (window.Guide?.demoStage()) {
-                render();
-                return;
-            }
-            if (nextState === demoState) return;
-            demoState = nextState;
-            stateSelect.value = demoState;
-            render();
-        }, 1000);
-    }
     window.addEventListener('classifier-preview-change', render);
     window.addEventListener('classifier-config-change', render);
-    window.addEventListener('storage', event => {
-        if (event.key === 'bmeClassifierPreviewV2' || event.key === null) render();
-    });
     render();
     preview.refreshConfiguration();
     poll();
@@ -471,7 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
             schedulePolling();
         }
     });
-    if (!preview.isDemo) setInterval(() => {
+    setInterval(() => {
         if (!document.hidden) preview.refreshConfiguration();
     }, 10000);
     setInterval(renderCountdown, 1000);

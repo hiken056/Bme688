@@ -1,16 +1,7 @@
 // guided measurement: current phase, time left, and a signal when the person has to act
-// the device runs it and this page shows it, the demo runs the same steps in the browser
+// the device runs it, this page shows it
 (() => {
-    const preview = window.ClassifierPreview;
-    const params = new URLSearchParams(window.location.search);
-    const SPEED = Math.max(1, Number(params.get('speed')) || 1);   // demo only: ?speed=60 makes a minute last a second
-    const STUCK = params.get('stuck') === '1';                      // demo only: sensors that never settle
-    // same as backend/guide.py
-    const CLEAN_S = 180, SAMPLE_S = 600, SETTLE_S = 180;
-    const WARM_LIMIT = 0.05, WARM_CHECKS = 3, WARM_EVERY_S = 30, WARM_HALF_S = 90, WARM_MAX_S = 1200;
-    const WINDOW_MS = 120000;     // demo: one analysis window
     const REPEAT_SOUND_MS = 30000;
-    const STORE = 'bmeGuide';
     const PAGE_TITLE = document.title;
 
     const card = document.getElementById('phase-card');
@@ -28,8 +19,7 @@
     const actionDetail = document.getElementById('action-detail');
     const actionButton = document.getElementById('action-button');
 
-    let demo = preview.isDemo ? load() : null;   // demo plan kept in the browser
-    let state = null;                             // what is shown, from the device or the demo
+    let state = null;                             // what is shown, from the device
     let timer = null;
     let audio = null;
     let lastAction = null;
@@ -40,90 +30,9 @@
     let sending = false;
     let generation = 0;                           // grows at every stop, old answers are ignored
 
-    function load() {
-        try { return JSON.parse(localStorage.getItem(STORE)); } catch (e) { return null; }
-    }
-
-    function save() {
-        try {
-            if (demo) localStorage.setItem(STORE, JSON.stringify(demo));
-            else localStorage.removeItem(STORE);
-        } catch (e) {}
-    }
-
     function clock(ms) {
         const seconds = Math.max(0, Math.round(ms / 1000));
         return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-    }
-
-    // demo: the same steps as backend/guide.py, with a made-up warm-up
-    function demoNow() {
-        return demo.startedAt + (Date.now() - demo.startedAt) * SPEED;
-    }
-
-    function demoWarm(now) {
-        const g = demo.guide;
-        while (g.warm_at == null) {
-            const t = g.warm.last_check == null ? demo.startedAt + 2 * WARM_HALF_S * 1000 : g.warm.last_check + WARM_EVERY_S * 1000;
-            if (t > now) return;
-            if (t - demo.startedAt >= WARM_MAX_S * 1000) {
-                g.warm_at = t;
-                g.warm.capped = true;
-                return;
-            }
-            const drift = STUCK ? 0.2 : 0.6 * Math.exp(-(t - demo.startedAt) / 150000);   // a cold start settling
-            g.warm.last_check = t;
-            g.warm.drift = Math.round(drift * 1000) / 1000;
-            g.warm.checks = drift < WARM_LIMIT ? g.warm.checks + 1 : 0;
-            if (g.warm.checks >= WARM_CHECKS) g.warm_at = t;
-        }
-    }
-
-    function cleanStarts(g) {
-        if (g.warm_at == null) return [];
-        if (g.mode === 'test') return [g.warm_at, ...g.recleans];
-        return [g.warm_at, ...g.removed.map(t => t + SETTLE_S * 1000)].slice(0, g.cycles.length);
-    }
-
-    function planPhase(g, start, now) {
-        if (g.warm_at == null) return { key: 'warmup', index: 0, start_ms: start };
-        const starts = cleanStarts(g);
-        if (g.mode === 'test') {
-            const index = starts.length - 1, low = starts[index], high = low + CLEAN_S * 1000;
-            return now < high ? { key: 'clean', index, start_ms: low, end_ms: high } : { key: 'testing', index, since_ms: high };
-        }
-        const n = g.cycles.length;
-        for (let i = 0; i < n; i++) {
-            if (i > 0 && now < g.removed[i - 1] + SETTLE_S * 1000) {
-                return { key: 'settle', index: i, start_ms: g.removed[i - 1], end_ms: g.removed[i - 1] + SETTLE_S * 1000 };
-            }
-            const low = starts[i], high = low + CLEAN_S * 1000;
-            if (now < high) return { key: 'clean', index: i, start_ms: low, end_ms: high };
-            const placed = g.placed[i];
-            if (placed == null) return { key: 'add', index: i, since_ms: high };
-            if (now < placed + SAMPLE_S * 1000) return { key: 'sample', index: i, start_ms: placed, end_ms: placed + SAMPLE_S * 1000 };
-            if (i < n - 1 && g.removed[i] == null) return { key: 'remove', index: i, since_ms: placed + SAMPLE_S * 1000 };
-        }
-        return { key: 'done', index: n - 1 };
-    }
-
-    function planLeft(g, phase, now) {
-        if (g.mode === 'test') return null;
-        const n = g.cycles.length;
-        if (phase.key === 'done') return 0;
-        if (phase.key === 'warmup') return (n * (CLEAN_S + SAMPLE_S) + (n - 1) * SETTLE_S) * 1000;
-        const after = { settle: CLEAN_S + SAMPLE_S, clean: SAMPLE_S, add: SAMPLE_S, sample: 0, remove: 0 };
-        return (phase.end_ms ? Math.max(0, phase.end_ms - now) : 0) + after[phase.key] * 1000
-            + (n - 1 - phase.index) * (SETTLE_S + CLEAN_S + SAMPLE_S) * 1000;
-    }
-
-    function demoState() {
-        const now = demoNow();
-        demoWarm(now);
-        const g = demo.guide;
-        const phase = planPhase(g, demo.startedAt, now);
-        return { active: true, mode: g.mode, cycles: g.cycles, phase, now_ms: now, left_ms: planLeft(g, phase, now),
-            warm: g.warm, warm_limit: WARM_LIMIT, warm_checks: WARM_CHECKS };
     }
 
     // text and buttons for each step
@@ -254,25 +163,13 @@
         }
     }
 
-    // a collection ends on its own, the device stops it and the demo stops here
+    // a collection ends on its own, the device stops it
     function finished() {
         beep();
         window.dispatchEvent(new Event('guide-finished'));
     }
 
     async function refresh() {
-        if (demo) {
-            state = demoState();
-            if (state.phase.key === 'done' && !demo.finished) {
-                demo.finished = true;
-                save();
-                finished();
-            }
-            save();
-            render();
-            return;
-        }
-        if (preview.isDemo) return;
         const asked = generation;
         try {
             const next = await (await fetch('/api/guide')).json();
@@ -302,14 +199,6 @@
     async function send(action) {
         const phase = state?.phase;
         if (!phase || sending) return;
-        if (demo) {
-            const g = demo.guide;
-            if (action === 'reclean') g.recleans.push(demoNow());
-            else g[action][phase.index] = demoNow();
-            save();
-            refresh();
-            return;
-        }
         sending = true;
         render();
         try {
@@ -345,9 +234,7 @@
             show();
         } else {
             // one last look: did the cycles end the measurement
-            const guided = !preview.isDemo && state?.active;
-            demo = null;
-            save();
+            const guided = state?.active;
             hide();
             if (guided) {
                 fetch('/api/guide').then(r => r.json()).then(s => { if (s.finished) finished(); }).catch(() => {});
@@ -355,33 +242,12 @@
         }
     });
 
-    // demo: what the prediction panel should show, following the steps
-    function demoStage() {
-        if (!demo) return null;
-        const s = demoState();
-        const g = demo.guide, now = s.now_ms, phase = s.phase;
-        const ended = cleanStarts(g).map((low, i) => [i, low + CLEAN_S * 1000]).filter(w => w[1] <= now);
-        let from = null;
-        if (g.mode === 'test' && phase.key === 'testing') from = phase.since_ms;
-        if (g.mode === 'collect' && ['sample', 'remove'].includes(phase.key)) from = g.placed[phase.index];
-        const cycle = ended.length ? ended[ended.length - 1][0] + 1 : null;
-        if (from == null) return { key: cycle && g.mode === 'collect' ? 'waiting_sample' : 'waiting_clean_air', cycle, mode: g.mode };
-        const left = from + WINDOW_MS - now;
-        const sample = g.mode === 'collect' ? g.cycles[phase.index].sample_class : 'clean_air';
-        return left > 0 ? { key: 'collecting', left_s: left / 1000, cycle, mode: g.mode }
-            : { key: 'ready', cycle, sample, mode: g.mode };
-    }
-
-    function start(mode, cycles) {
+    // a new measurement: sound on, notes not read yet
+    function start() {
         unlockSound();
         seen = null;
         cappedSeen = false;
-        if (!preview.isDemo) return;
-        demo = { startedAt: Date.now(), finished: false, guide: {
-            mode, cycles, placed: [], removed: [], recleans: [], warm_at: null,
-            warm: { checks: 0, last_check: null, drift: null, capped: false } } };
-        save();
     }
 
-    window.Guide = { start, demoStage };
+    window.Guide = { start };
 })();

@@ -2,7 +2,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn        = document.getElementById('main-toggle-btn');
     const statusLog  = document.getElementById('status-log');
     const preview = window.ClassifierPreview;
-    const duration   = document.getElementById('measurement-duration');
     const sessionDialog = document.getElementById('session-dialog');
     const sessionForm   = document.getElementById('session-form');
     const sessionError  = document.getElementById('session-error');
@@ -48,7 +47,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // set the Pi clock from the browser
     function syncRTC() {
-        if (preview.isDemo) return Promise.resolve();
         const ts = Date.now();
         console.log('[Auto-Sync] RTC =>', new Date(ts).toISOString());
         
@@ -59,35 +57,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }).catch(e => console.error("Failed to sync RTC", e));
     }
     syncRTC();
-
-    function saveFileDuration() {
-        if (preview.isDemo) return Promise.resolve({ status: 'success' });
-        return fetch('/api/file-duration', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ file_duration_minutes: Number(duration.value) })
-        })
-            .then(r => r.json())
-            .then(res => {
-                if (res.status !== 'success') throw new Error(res.message || 'Save failed');
-                return res;
-            });
-    }
-
-    if (!preview.isDemo) fetch('/api/file-duration')
-        .then(r => r.json())
-        .then(res => {
-            if (res.status === 'success') {
-                duration.value = String(res.file_duration_minutes);
-            }
-        })
-        .catch(e => console.error('Failed to load file length', e));
-
-    duration.addEventListener('change', () => {
-        saveFileDuration().catch(e => {
-            statusLog.innerHTML = `<p class="stopped-text" style="color:var(--danger);">${e.message}</p>`;
-        });
-    });
 
     function openSessionDialog() {
         sessionError.textContent = '';
@@ -137,24 +106,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function startMeasurement(form, showError) {
         const measurementTitle = form.title;
-        if (preview.isDemo) {
-            preview.saveSession({ running: true, title: measurementTitle, duration: Number(duration.value) });
-            window.Guide.start(form.mode, form.cycles);
-            startUI(Number(duration.value), measurementTitle);
-            return;
-        }
-
         sessionStart.disabled = true;
         btn.disabled = true;
         sessionError.textContent = '';
 
-        Promise.all([syncRTC(), saveFileDuration()])
+        // the file length is the one saved on the Pi, 30 min by default
+        syncRTC()
             .then(() => fetch('/api/start-sensor', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     measurement_title: measurementTitle,
-                    file_duration_minutes: Number(duration.value),
                     mode: form.mode,
                     cycles: form.cycles
                 })
@@ -168,8 +130,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (res.status !== 'success') throw new Error(res.message || 'Start failed');
                 sessionDialog.close();
-                window.Guide.start(form.mode, form.cycles);
-                startUI(res.file_duration_minutes, res.measurement_title);
+                window.Guide.start();
+                startUI(res.measurement_title);
             })
             .catch(e => showError(e.message))
             .finally(() => {
@@ -179,23 +141,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
-    function startUI(fileDurationMinutes = null, folderName = null) {
+    function startUI(folderName = null) {
         if (isRunning) return;
         isRunning = true;
         if (sessionDialog.open) sessionDialog.close();
-        if (fileDurationMinutes) duration.value = String(fileDurationMinutes);
         activeFolderName = folderName || activeFolderName;
-        duration.disabled = true;
         btn.textContent = 'STOP';
         btn.classList.replace('start', 'stop');
         statusLog.innerHTML = `<p class="running-text" style="color:var(--neon-blue);">Starting measurement...</p>`;
         window.dispatchEvent(new CustomEvent('measurement-ui-change', { detail: { running: true } }));
-
-        if (preview.isDemo) {
-            statusLog.innerHTML = '<p class="running-text" style="color:var(--success);"></p>';
-            statusLog.querySelector('p').textContent = 'Recording';
-            return;
-        }
 
         // refresh recording logs every two seconds
         liveInterval = setInterval(() => {
@@ -222,7 +176,6 @@ document.addEventListener('DOMContentLoaded', () => {
         isRunning = false;
         sensorsStarted = false;
         activeFolderName = null;
-        duration.disabled = false;
         btn.textContent = 'START';
         btn.classList.replace('stop', 'start');
         statusLog.innerHTML = `<p class="stopped-text">Measurement stopped.</p>`;
@@ -233,8 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function stopMeasurement() {
-        if (preview.isDemo) preview.saveSession({ running: false });
-        else fetch('/api/stop-sensor', { method: 'POST' });
+        fetch('/api/stop-sensor', { method: 'POST' });
         stopUI();
     }
 
@@ -246,11 +198,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // the last cycle ends the measurement
     window.addEventListener('guide-finished', () => {
-        // the device stops on its own, the demo stops here
-        if (isRunning) {
-            if (preview.isDemo) stopMeasurement();
-            else stopUI();
-        }
+        // the device stops on its own
+        if (isRunning) stopUI();
         statusLog.innerHTML = '<p class="success-text">All cycles done. You can remove the sample.</p>';
     });
 
@@ -271,7 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(res => {
                 if (res.status === 'success') {
                     if (res.is_running && !isRunning) {
-                        startUI(res.file_duration_minutes, res.measurement_title);
+                        startUI(res.measurement_title);
                     }
                     else if (!res.is_running && isRunning) stopUI();
                     showFailure(res.failure);
@@ -279,13 +228,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }).catch(e => {});
     }
 
-    if (preview.isDemo) {
-        const session = preview.readSession();
-        if (session.running) startUI(session.duration, session.title);
-    } else {
-        checkMeasurementStatus();
-        setInterval(checkMeasurementStatus, 2500);
-    }
+    checkMeasurementStatus();
+    setInterval(checkMeasurementStatus, 2500);
 
     function renderMiniGrid() {
         const gridEl = document.getElementById('mini-sensor-grid');
@@ -298,14 +242,6 @@ document.addEventListener('DOMContentLoaded', () => {
             1: 'p_std', 2: 'p_std', 3: 'p_std', 4: 'p_std',
             5: 'p_std', 6: 'p_std', 7: 'p_std', 8: 'p_std'
         };
-
-        if (preview.isDemo) {
-            preview.refreshConfiguration().then(() => {
-                const config = preview.configuration().config;
-                buildGrid(config?.presets || [], config?.assignments || {});
-            });
-            return;
-        }
 
         fetch('/api/config')
             .then(r => r.json())

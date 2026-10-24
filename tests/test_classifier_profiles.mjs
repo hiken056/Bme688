@@ -10,9 +10,13 @@ function storage() {
     };
 }
 
-function page(search = '?demo=1', fetch = async () => { throw new Error('Offline'); }) {
+// the device answers /api/config with config, or is offline
+function page(config = null) {
     const window = new EventTarget();
-    window.location = { search };
+    const fetch = async url => {
+        if (!config) throw new Error('Offline');
+        return { ok: true, json: async () => (url === '/api/config' ? clone(config) : { status: 'success', models: [] }) };
+    };
     const context = vm.createContext({
         window, document: { addEventListener() {} }, URLSearchParams, Event,
         localStorage: storage(), sessionStorage: storage(), fetch,
@@ -25,13 +29,22 @@ function page(search = '?demo=1', fetch = async () => { throw new Error('Offline
 }
 
 const clone = value => JSON.parse(JSON.stringify(value));
-const { api } = page();
-assert.equal(api.read().models.length, 12);
-assert.equal(new Set(api.read().models.map(model => model.id)).size, 12);
-assert.ok(api.read().models.every(model => api.validRequirements(model)));
+
+// a model trained with two sensors of each of these profiles, and a device set up the same way
+const names = ['hp_301_basic', 'hp_354_standard', 'hp_411_levels', 'hp_501_sweep'];
+const setup = page();
+const presets = setup.context.window.HeaterProfiles.presets();
+const preset = name => presets.find(item => item.name === name);
+const original = {
+    presets,
+    assignments: Object.fromEntries(Array.from({ length: 8 }, (_, i) => [i + 1, preset(names[Math.floor(i / 2)]).id])),
+    file_duration_minutes: 30
+};
+const model = setup.api.expandRequirements(names.map(name =>
+    ({ ...setup.context.window.HeaterProfiles.definition(preset(name)), count: 2 })));
+const { api } = page(original);
 await api.refreshConfiguration();
-const model = api.activeModel();
-const original = clone(api.configuration().config);
+assert.ok(api.validRequirements(model));
 assert.equal(api.compatibility(model).compatible, true);
 assert.equal(api.profileGroups(model).length, 4);
 const countBased = api.expandRequirements(api.profileGroups(model).map(group => ({
@@ -142,18 +155,14 @@ assert.equal(api.compatibility(custom, { status: 'ready', config: customPlan.con
 assert.equal(JSON.stringify(original), unchanged);
 assert.throws(() => api.configurationForModel({}, original));
 
-api.saveDemoConfiguration(otherSensors);
-await api.refreshConfiguration();
-assert.equal(api.compatibility(model).status, 'mismatch');
+const changed = page(otherSensors);
+await changed.api.refreshConfiguration();
+assert.equal(changed.api.compatibility(model).status, 'mismatch');
 
-const offline = page('');
+const offline = page();
 offline.context.localStorage.setItem('bmeConfig', JSON.stringify(original));
 await offline.api.refreshConfiguration();
 assert.equal(offline.api.configuration().status, 'unavailable');
 assert.equal(offline.api.compatibility(model).compatible, false);
-
-const live = page('', async () => ({ ok: true, json: async () => clone(original) }));
-await live.api.refreshConfiguration();
-assert.equal(live.api.compatibility(model).compatible, true);
-assert.equal(live.api.read().models.length, 0);
-console.log('PASS: exact profile settings and counts, reordered sensor groups with unique input mapping, renamed profiles, subsets, invalid metadata, saved demo config and fail-closed live config.');
+assert.equal(api.read().models.length, 0);
+console.log('PASS: exact profile settings and counts, reordered sensor groups with unique input mapping, renamed profiles, subsets, invalid metadata, changed device config and fail-closed offline config.');

@@ -212,18 +212,6 @@
 .prediction-summary.is-unknown .prediction-confidence strong { color: var(--muted); }
 .prediction-result[data-state="error"] .prediction-symbol,
 .prediction-result[data-state="incompatible"] .prediction-symbol { color: #e0aa71; }
-.prediction-demo-controls {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.5rem 1rem;
-    align-items: center;
-    padding-top: 1rem;
-    margin-top: 1rem;
-    border-top: 1px solid var(--glass-border);
-}
-.prediction-demo-controls label { color: var(--muted); font-size: 0.72rem; }
-.prediction-demo-controls select { min-width: 0; font-size: 0.78rem; }
-.prediction-demo-controls[hidden] { display: none; }
 
 .classifier-content { justify-content: flex-start; }
 .classifier-panel {
@@ -410,42 +398,7 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
 .prediction-panel summary:focus-visible,
 .mobile-nav-links a:focus-visible { outline: 2px solid var(--primary-h); outline-offset: 4px; }
 
-/* checks and warnings */
-.prediction-checks { border-top: 1px solid var(--glass-border); }
-.prediction-checks[hidden] { display: none; }
-.prediction-checks summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    min-height: 44px;
-    color: var(--muted);
-    font-size: 0.75rem;
-    cursor: pointer;
-    list-style: none;
-}
-.prediction-checks summary::-webkit-details-marker { display: none; }
-.prediction-checks summary:hover { color: var(--text); }
-.prediction-checks[data-state="warn"] summary { color: #e0aa71; }
-.prediction-checks[data-state="fail"] summary { color: #ed948c; }
-.prediction-checks ul { list-style: none; display: grid; gap: 0.7rem; padding-bottom: 1rem; }
-.prediction-checks li { display: flex; gap: 0.65rem; font-size: 0.75rem; line-height: 1.5; }
-.prediction-checks li > span:last-child { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
-.prediction-checks li strong { font-weight: 500; }
-.prediction-checks li > span:last-child > span { color: var(--muted); font-size: 0.7rem; overflow-wrap: anywhere; }
-.prediction-check-mark {
-    flex: 0 0 20px;
-    height: 20px;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    font-size: 0.65rem;
-    font-weight: 700;
-    color: var(--success);
-    background: rgba(0,184,148,0.1);
-}
-.prediction-checks li.is-warn .prediction-check-mark { color: #e0aa71; background: rgba(224,170,113,0.12); }
-.prediction-checks li.is-fail .prediction-check-mark { color: #ed948c; background: rgba(231,76,60,0.12); }
+/* warnings */
 .prediction-warnings {
     list-style: none;
     display: grid;
@@ -502,8 +455,6 @@ details[open] > summary .classifier-chevron { transform: rotate(225deg); margin-
     .prediction-confidence strong { font-size: 1.9rem; }
     .prediction-confidence > span { font-size: 0.6rem; }
     .prediction-placeholder { min-height: 260px; }
-        .prediction-demo-controls { grid-template-columns: minmax(0, 1fr); gap: 0.65rem; }
-    .prediction-demo-controls select { min-height: 44px; font-size: 1rem; }
     .classifier-panel { padding: 1.25rem; min-height: calc(100dvh - var(--topbar-h) - 2rem); }
     .classifier-page-header { align-items: flex-start; padding-bottom: 1.2rem; }
     .classifier-page-header h1 { font-size: 1.4rem; }

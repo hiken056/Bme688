@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const panel = document.getElementById('classifier-panel');
     const settings = document.querySelector('.classifier-settings');
     let selectedId = preview.activeModel()?.id || null;
-    let measurementRunning = preview.isDemo && preview.readSession().running;
+    let measurementRunning = false;
     let uploading = false;
     let busy = false;
     let removeId = null;
@@ -170,8 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
             warmup_seconds: seconds(metadata.warmup_seconds, 120),
             prediction_interval_seconds: seconds(metadata.prediction_interval_seconds, 5),
             size_bytes: file.size,
-            filename: file.name,
-            demo: false
+            filename: file.name
         };
         model.sensor_profiles = requirements?.sensor_profiles || metadata.sensor_profiles;
         if (!preview.validRequirements(model)) {
@@ -208,7 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const text = await file.text();
             const model = parseMetadata(JSON.parse(text), file);
             if (measurementRunning) throw new Error('Stop measurement before adding a model.');
-            const added = await preview.addModel(text, file, model);
+            const added = await preview.addModel(text, file);
             selectedId = added?.id || model.id;
             notify(preview.read().activeId === selectedId ? 'Model added and selected.' : 'Model added. Select it to use it.');
         } catch (error) {
@@ -283,40 +282,29 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     async function checkMeasurement() {
-        if (preview.isDemo) {
-            measurementRunning = Boolean(preview.readSession().running);
-        } else {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3000);
-            try {
-                const response = await fetch('/api/status', { signal: controller.signal });
-                if (response.ok) {
-                    const payload = await response.json();
-                    if (payload.status === 'success') measurementRunning = Boolean(payload.is_running);
-                }
-            } catch (error) {} finally {
-                clearTimeout(timeout);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        try {
+            const response = await fetch('/api/status', { signal: controller.signal });
+            if (response.ok) {
+                const payload = await response.json();
+                if (payload.status === 'success') measurementRunning = Boolean(payload.is_running);
             }
+        } catch (error) {} finally {
+            clearTimeout(timeout);
         }
         if (measurementRunning) {
             panel.hidden = true;
-            window.location.replace(preview.isDemo
-                ? `index.html?demo=1${preview.showControls ? '&controls=1' : ''}`
-                : 'index.html');
+            window.location.replace('index.html');
             return;
         }
         panel.hidden = false;
         updateControls();
     }
 
-    window.addEventListener('storage', event => {
-        if (event.key === 'bmeClassifierPreviewV2' || event.key === null) render();
-    });
     window.addEventListener('classifier-preview-change', render);
     window.addEventListener('focus', () => preview.refreshModels());
     render();
     checkMeasurement();
-    if (!preview.isDemo) {
-        setInterval(checkMeasurement, 2500);
-    }
+    setInterval(checkMeasurement, 2500);
 });

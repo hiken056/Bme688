@@ -59,8 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // load the device config first
-    (preview.isDemo ? preview.refreshConfiguration().then(() => preview.configuration().config)
-        : fetch('/api/config').then(r => r.json()))
+    fetch('/api/config')
+        .then(r => r.json())
         .then(res => {
             if (res.presets) {
                 const userPresets = res.presets.filter(p => !p.builtin).map(normalizeUserPreset);
@@ -337,17 +337,15 @@ document.addEventListener('DOMContentLoaded', () => {
             file_duration_minutes: fileDurationMinutes
         };
 
-        (preview.isDemo ? Promise.resolve().then(() => {
-            preview.saveDemoConfiguration(payload);
-            return { status: 'success' };
-        }) : fetch('/api/config', {
+        fetch('/api/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
-        }).then(r => r.json()))
+        })
+            .then(r => r.json())
             .then(res => {
                 if (res.status !== 'success') throw new Error(res.message || 'Save failed');
-                if (!preview.isDemo) localStorage.setItem('bmeConfig', JSON.stringify(payload));
+                localStorage.setItem('bmeConfig', JSON.stringify(payload));
                 const orig = applyAllBtn.textContent;
                 applyAllBtn.textContent = '\u2713 Configuration Saved';
                 setTimeout(() => applyAllBtn.textContent = orig, 2000);
