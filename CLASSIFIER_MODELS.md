@@ -81,7 +81,7 @@ a warning with every prediction of that measurement. The bar on the page fills a
 after a cold start.
 
 If the Pi reboots during a measurement, `cycles.json` of that recording gets `"interrupted": true`.
-A measurement started without the switch (older interface) still uses minutes 10-15 as clean air.
+A measurement started without the switch (older interface) uses the clean air from the training data.
 
 ## Checks before each prediction
 

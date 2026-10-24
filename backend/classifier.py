@@ -28,10 +28,6 @@ TICK_S = 0.14                  # heater time base in parallel mode
 KEEP_MS = 20 * 60 * 1000       # cycles kept per sensor
 LOOP_SECONDS = 3
 
-# clean air from the measurement: minutes 10-15, the first minutes are still settling
-MEASURED_REFERENCE_FROM_S = 600
-MEASURED_REFERENCE_TO_S = 900
-
 # limits from the training data
 UNUSUAL_Z = 5.0                # no training window went past 4
 UNUSUAL_COUNT = 3
@@ -636,8 +632,6 @@ class Predictor:
         self.is_running, self.read_config = is_running, read_config
         self.lock = threading.Lock()
         self.result = None
-        self.result_checks = []        # checks of the last prediction
-        self.measured = None           # clean air from the running measurement
         self.cycle_ref = None          # clean air of the current cycle
         self.on_guide_done = on_guide_done
         self.guide_finished = False    # the last guided measurement ended on its own
@@ -695,7 +689,7 @@ class Predictor:
         model = self.store.active()
         if not running:
             with self.lock:
-                self.result, self.last_prediction_t, self.result_checks = None, None, []
+                self.result, self.last_prediction_t = None, None
                 self.status_cache = self._status(model, running=False)
             return
         self.data.clip = model["clip_ohm"] if model else DEFAULT_CLIP_OHM
@@ -707,7 +701,6 @@ class Predictor:
         if status.get("due"):
             self._predict(model, status)
         elif status.get("state") == "ready" and self.result:
-            status["checks"].extend(self.result_checks)
             status["state"] = self.result["state"]
             status["message"] = self.result.get("message", "")
         if self.last_prediction_t is not None and status.get("state") in ("ready", "unknown", "unusual", "insufficient"):
@@ -727,10 +720,10 @@ class Predictor:
             status["result"] = self.result
             return status
 
-    # status and checks
+    # status
     def _status(self, model, running, now_ms=None):
         now_ms = now_ms or int(time.time() * 1000)
-        status = {"status": "success", "running": running, "model": None, "checks": [], "warnings": []}
+        status = {"status": "success", "running": running, "model": None, "warnings": []}
         if not model:
             status.update(state="no_model", message="Select a model on the Classifier page.")
             return status
@@ -738,11 +731,8 @@ class Predictor:
                            "classes": model["classes"], "class_labels": [nice_class(c) for c in model["classes"]],
                            "window_seconds": model["window_seconds"],
                            "prediction_interval_seconds": model["prediction_interval_seconds"]}
-        checks = status["checks"]
         setup = sensor_setup(self.read_config())
         mapping, issues = match_sensors(model, setup)
-        checks.append({"id": "profiles", "ok": not issues, "label": "Heater profiles match the model",
-                       "detail": " ".join(issues) or None})
         if issues:
             status.update(state="incompatible", message="The heater profiles don't match the model.", issues=issues)
             return status
@@ -754,17 +744,8 @@ class Predictor:
             # sensors without a value keep the training value
             refs = {s: cycle_ref["refs"].get(s, (refs or {}).get(s)) for sensors in mapping.values() for s in sensors}
             reference = cycle_ref["reference"]
-        elif running and not guide:
-            measured = self._measured_reference()
-            if measured:
-                # sensors without a measured value keep the training value
-                refs = {s: measured["refs"].get(s, (refs or {}).get(s)) for sensors in mapping.values() for s in sensors}
-                reference = measured["reference"]
         status["reference"] = reference
-        reference_check = {"id": "reference", "ok": refs is not None, "warn": reference["averaged"],
-                           "label": "Clean-air reference", "detail": reference["label"]}
         if not running:
-            checks.append(reference_check)
             status.update(state="idle", message="Start a measurement to get predictions.")
             return status
 
@@ -772,14 +753,11 @@ class Predictor:
         first_t = self.data.first_t
         stale_limit = max([v["cycle_s"] for v in setup.values()] + [30]) * 2 * 1000 + 15000
         fresh = last_t is not None and now_ms - last_t < stale_limit
-        checks.append({"id": "data", "ok": fresh, "label": "Sensor data arriving",
-                       "detail": None if fresh else "No new readings from the sensors."})
         if last_t is None:
             status.update(state="starting", message="Waiting for the first sensor readings.")
             return status
         elapsed = (last_t - first_t) / 1000 if first_t else 0
         status["measurement"] = {"elapsed_s": round(elapsed)}
-        checks.append(reference_check)
         if not fresh:
             status.update(state="no_data", message="No new readings from the sensors. Check the measurement log.")
             return status
@@ -909,41 +887,6 @@ class Predictor:
                 pass
         return self.cycle_ref
 
-    # clean air from minutes 10-15 of the running measurement, taken once per measurement
-    def _measured_reference(self):
-        key = self.session_key()
-        if self.measured and self.measured["key"] == key:
-            return self.measured
-        first_t, last_t = self.data.first_t, self.data.last_t()
-        if not first_t or not last_t or last_t < first_t + MEASURED_REFERENCE_TO_S * 1000:
-            return None
-        low, high = first_t + MEASURED_REFERENCE_FROM_S * 1000, first_t + MEASURED_REFERENCE_TO_S * 1000
-        middle = (low + high) / 2
-        refs, changes = {}, {}
-        for sensor, items in self.data.cycles_by_sensor().items():
-            inside = [c for c in items if low <= c[0] < high]
-            if len(inside) < 3:
-                continue
-            refs[sensor] = [median([c[1][i] for c in inside]) for i in range(10)]
-            first = [median([c[1][i] for c in inside if c[0] < middle]) for i in range(10)]
-            second = [median([c[1][i] for c in inside if c[0] >= middle]) for i in range(10)]
-            changes[sensor] = round(median([abs(a - b) for a, b in zip(first, second) if a is not None and b is not None]) or 0, 4)
-        if not refs:
-            return None
-        reference = {"source": "measurement", "board": None, "boards": [], "averaged": False, "log": "measurement",
-                     "recorded_at": iso(high), "label": "Clean air from minutes 10-15 of this measurement"}
-        self.measured = {"key": key, "refs": refs, "reference": reference}
-        # kept next to the recording, to compare later
-        run = self.data.newest_run()
-        if run:
-            try:
-                write_json_atomic(run / "reference.json", {
-                    "from": iso(low), "to": iso(high), "change_between_halves": changes,
-                    "ln_r0": {str(sensor): values for sensor, values in refs.items()}})
-            except OSError:
-                pass
-        return self.measured
-
     # prediction
     def _predict(self, model, status):
         ctx = status["_ctx"]
@@ -968,16 +911,11 @@ class Predictor:
             notes.append("The sensors were still settling when the 20 min warm-up limit was reached.")
         out = classify(model, values)
         missing_ok = out["missing"] <= MAX_MISSING_FRACTION * len(model["features"])
-        status["checks"].append({"id": "window", "ok": not problems and missing_ok, "warn": bool(notes),
-                                 "label": "Enough data in the analysis window",
-                                 "detail": " ".join(problems + notes) or None})
         status["warnings"].extend(notes)
         probabilities = out["probabilities"]
         order = sorted(range(len(probabilities)), key=lambda i: -probabilities[i])
         top = order[0]
         unusual = out["unusual"] >= UNUSUAL_COUNT
-        status["checks"].append({"id": "pattern", "ok": not unusual, "label": "Pattern similar to the training data",
-                                 "detail": f"{out['unusual']} of {len(model['features'])} values far outside the training range." if unusual else None})
         if problems or not missing_ok:
             state, label = "insufficient", None
             status["message"] = "Not enough sensor data in the last window to make a prediction."
@@ -990,7 +928,6 @@ class Predictor:
         else:
             state, label = "ready", model["classes"][top]
         status["state"] = state
-        self.result_checks = status["checks"][-2:]
         self.last_prediction_t = t_end
         self.result = {
             "state": state, "label": label, "label_text": nice_class(label) if label else None,

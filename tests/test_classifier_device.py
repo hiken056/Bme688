@@ -162,7 +162,7 @@ class PredictionStates(DeviceTestCase):
         self.assertEqual(status["reference"]["board"], "bme7")
         self.assertFalse(status["reference"]["averaged"])
         self.assertEqual(status["result"]["label"], "clean_air")
-        self.assertTrue(all(check["ok"] and not check.get("warn") for check in status["checks"]), status["checks"])
+        self.assertEqual(status["warnings"], [])
         self.assertTrue(0 <= status["next_prediction_s"] <= 30)
 
         self.write(2.5, shift=0.3)
@@ -172,34 +172,6 @@ class PredictionStates(DeviceTestCase):
         self.assertTrue(log[0].startswith("Timestamp_ms,Time,Model"))
         self.assertIn(",smell,", log[-1])
         self.assertIn(",bme7,", log[-1])
-
-    def test_clean_air_from_the_measurement_after_fifteen_minutes(self):
-        # drifted sensors: clean air already looks like a smell next to the training reference
-        self.write(14, shift=0.3)
-        status = self.tick()
-        self.assertEqual(status["reference"]["source"], "training")
-        self.assertEqual(status["result"]["label"], "smell")
-
-        self.write(1.5, shift=0.3)
-        status = self.tick()
-        self.assertEqual(status["reference"]["source"], "measurement")
-        self.assertEqual(status["result"]["label"], "clean_air")
-        saved = json.loads((self.run_dir / "reference.json").read_text())
-        self.assertEqual(sorted(saved["ln_r0"]), ["1", "2", "3", "4"])
-
-        # a smell on top of the drift is still found
-        self.write(2.5, shift=0.6)
-        status = self.tick()
-        self.assertEqual(status["result"]["label"], "smell")
-        self.assertIn(",measurement,", (self.run_dir / "predictions.csv").read_text().splitlines()[-1])
-
-        # a new measurement starts with the training reference again
-        self.running = False
-        self.tick()
-        self.running = True
-        classifier.write_json_atomic(self.session, {"title_dir": str(self.run_dir.parent), "started_at": self.t / 1000 + 1})
-        self.predictor.data.first_t = None
-        self.assertNotEqual(self.predictor.measured["key"], self.predictor.session_key())
 
     def start_guided(self, mode, cycles=()):
         classifier.write_json_atomic(self.session, {"title_dir": str(self.run_dir.parent), "started_at": T0 / 1000,
@@ -333,8 +305,6 @@ class PredictionStates(DeviceTestCase):
         status = self.tick()
         self.assertTrue(status["reference"]["averaged"])
         self.assertEqual(status["result"]["label"], "clean_air")
-        reference_check = [c for c in status["checks"] if c["id"] == "reference"][0]
-        self.assertTrue(reference_check["ok"] and reference_check["warn"])
 
     def test_moved_sensors_use_the_board_average(self):
         self.config["assignments"] = {"1": "p1", "2": "p1", "3": "p0", "4": "p0"}
