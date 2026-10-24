@@ -30,11 +30,14 @@
     const modeInputs = [...document.querySelectorAll('input[name="measure-mode"]')];
     const modeHint = document.getElementById('mode-hint');
     const startButton = document.getElementById('session-start');
+    const controls = cycleControl.closest('.duration-control');
+    const escapeHtml = preview.escapeHtml;
 
     let running = false;
     let cycles = [];
     let count = 2;
     let mode = 'collect';
+    let loaded = false;   // the controls stay hidden until the Pi's settings are in
 
     function load(key) {
         try { return localStorage.getItem(key); } catch (e) { return null; }
@@ -42,10 +45,6 @@
 
     function save(key, value) {
         try { localStorage.setItem(key, value); } catch (e) {}
-    }
-
-    function escapeHtml(text) {
-        return String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
     }
 
     // objects typed before on this device keep their class
@@ -70,6 +69,7 @@
     }
 
     function show() {
+        controls.style.visibility = loaded ? '' : 'hidden';
         countOut.textContent = count;
         minus.disabled = running || count <= 1;
         plus.disabled = running || count >= MAX_CYCLES;
@@ -86,26 +86,18 @@
     // the choice is kept on the device, so it is the same on every phone and after a reboot
     async function loadSettings() {
         let saved = null;
-        if (preview.isDemo) {
-            try { saved = JSON.parse(load('bmeGuideSettings')); } catch (e) {}
-        } else {
-            try { saved = await (await fetch('/api/guide-settings')).json(); } catch (e) {}
-        }
+        try { saved = await (await fetch('/api/guide-settings')).json(); } catch (e) {}
         if (saved?.mode) mode = saved.mode;
         if (saved?.cycles) count = saved.cycles;
+        loaded = true;
         show();
     }
 
     function saveSettings() {
-        const settings = { mode, cycles: count };
-        if (preview.isDemo) {
-            save('bmeGuideSettings', JSON.stringify(settings));
-            return;
-        }
         fetch('/api/guide-settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(settings)
+            body: JSON.stringify({ mode, cycles: count })
         }).catch(() => {});
     }
 
