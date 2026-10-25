@@ -95,27 +95,22 @@ bash disable_all.sh
 
 This stops the backend, sensor and access point. Saved configuration and measurements stay on the Pi.
 
-## Classifier
+## Measuring
 
-Models are uploaded on the Classifier page and stored on the Pi. The Pi runs the measurement and the predictions,
-the page only shows them, so closing the phone changes nothing.
+Join the unit's Wi-Fi, open the page and tap it once so it can beep.
+For predictions, select a model on the Classifier page first.
 
-1. Classifier page: add the model JSON and select it.
-2. Acquisition page: choose **Test** or **Collect data** above the start button, then press START.
+**Test**
+1. Choose **Test** and press **START**.
+2. Keep everything away during the warm-up and the clean air.
+3. At the beep, tap **Got it** and hold the sample close. The answer updates every 30 s.
+4. Press **STOP** when done.
 
-Both start with a warm-up: the Pi waits until the resistance changes less than 5% per minute (usually 4 to 10 min,
-at most 20). Then 3 min of clean air, used as the reference. Keep the sample away until the page asks for it.
+**Collect data**
+1. Choose **Collect data** and the number of cycles, one per sample.
+2. Press **START**, fill in each sample (name, class, distance) and press **Start**.
+3. Keep everything away during the warm-up and the clean air.
+4. At each beep, place the sample and tap **Sample placed**, later remove it and tap **Sample removed**.
+5. The Pi stops on its own after the last sample.
 
-**Test**: nothing to fill in. After the clean air, bring anything close to the sensors. Predictions run every
-30 seconds until you press Stop. Tap **New clean air** after moving to another room.
-Tests are saved in the `Tests` folder and are not used for training.
-
-**Collect data**: choose the number of cycles and fill in each sample: object, class, distance and notes.
-For each cycle: clean air, then a sound and a bar at the bottom of the page, place the sample and tap
-**Sample placed**, 10 min with the sample, tap **Sample removed**, 3 min airing out.
-The measurement stops on its own after the last sample.
-
-Each recording keeps `cycles.json` (the form and the steps), `reference_cycleN.json` (the clean air) and
-`predictions.csv` (every prediction, with the sample when collecting).
-
-Details: [CLASSIFIER_MODELS.md](CLASSIFIER_MODELS.md).
+Classifier details: [CLASSIFIER_MODELS.md](CLASSIFIER_MODELS.md).
